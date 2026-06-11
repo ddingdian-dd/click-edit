@@ -1,0 +1,34 @@
+{
+  "name": "visual-page-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Visual page editor overlay for local web apps with natural-language edits and CLI patch export.",
+  "bin": {
+    "vpe": "./src/cli/index.mjs",
+    "visual-page-editor": "./src/cli/index.mjs"
+  },
+  "exports": {
+    ".": "./src/runtime/overlay.mjs",
+    "./core/commands": "./src/core/commands.mjs",
+    "./plugins/vite": "./src/plugins/vite.mjs",
+    "./plugins/next": "./src/plugins/next.mjs",
+    "./plugins/next-cjs": "./src/plugins/next.cjs"
+  },
+  "scripts": {
+    "build:ext": "esbuild extension/content-entry.mjs --bundle --format=iife --outfile=extension/content.js",
+    "save-server": "node extension/save-server.mjs",
+    "test": "node test/commands.test.mjs && node test/patcher.test.mjs && node test/edits.test.mjs",
+    "test:commands": "node test/commands.test.mjs",
+    "test:patcher": "node test/patcher.test.mjs",
+    "test:edits": "node test/edits.test.mjs"
+  },
+  "keywords": [
+    "visual-editor",
+    "vite",
+    "nextjs",
+    "cli",
+    "design-devtools"
+  ],
+  "license": "UNLICENSED"
+}
