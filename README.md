@@ -1,4 +1,4 @@
-# Visual Page Editor
+# Click-Edit
 
 独立的页面可视化编辑工具。目标是让本地 Next/Vite 项目在开发模式下注入一个页面 overlay：用鼠标选中元素，用自然语言修改样式或文案，导出 `visual-edits.json`，再用 CLI 生成 patch。
 

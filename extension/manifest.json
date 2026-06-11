@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Visual Page Editor",
+  "name": "Click-Edit",
   "version": "0.1.0",
   "description": "选中页面元素，用属性面板或自然语言修改样式，即时预览效果。",
   "permissions": ["activeTab", "storage", "scripting", "tabs"],
