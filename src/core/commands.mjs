@@ -43,14 +43,21 @@ function extractQuotedText(command) {
 }
 
 function hasTextStyleIntent(command) {
-  return /文字颜色|字体颜色|字色/.test(command)
+  return /文字颜色|字体颜色|字色|文字(?:改|变|换|设)?(?:为|成)?(?:蓝|绿|红|橙|紫|黑|白|灰|#)|(?:^|[，,；;])字(?:改|变|换|设)?(?:为|成)?(?:蓝|绿|红|橙|紫|黑|白|灰|#)|(?:蓝|绿|红|橙|紫|黑|白|灰)色?字|颜色(?:改|变|换|设)(?:为|成)/.test(command)
 }
 
 function hasBackgroundIntent(command) {
-  return /背景色?|底色|填充色|(?:蓝|绿|红|橙|紫|黑|白|灰|浅灰|纯白|纯黑)底/.test(command)
+  if (/^颜色/.test(command)) return false
+  return /背景色?|底色|填充色|(?:蓝|绿|红|橙|紫|黑|白|灰|浅灰|纯白|纯黑)底|按钮(?:改|变|换|设)(?:为|成)|(?:变|改成?|换成?)(?:蓝|绿|红|橙|紫|黑|白|灰)色?(?:按钮|背景|底)?/.test(command)
+}
+
+function hasTextColorIntent(command) {
+  return /(?:文字|字体?|文本).*(?:蓝|绿|红|橙|紫|黑|白|灰|#[0-9a-fA-F])|(?:蓝|绿|红|橙|紫|黑|白|灰)(?:色)?字|颜色(?:改|换|设)(?:为|成)/.test(command)
 }
 
 function hasTextContentIntent(command) {
+  if (hasTextColorIntent(command)) return false
+  if (hasBackgroundIntent(command)) return false
   return command.includes('文案') || (command.includes('文字') && !hasTextStyleIntent(command))
 }
 
@@ -79,6 +86,38 @@ function extractCssSize(command, axis) {
   return `${match[1]}${match[2] || 'px'}`
 }
 
+function extractTextColor(command) {
+  // "字白色" / "字变白" / "文字改为白色" / "白字" / "字体颜色改为白色"
+  const afterText = command.match(/(?:文字|字体?|文本)(?:颜色)?(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/)
+  if (afterText) {
+    const c = getColorFromCommand(afterText[1])
+    if (c) return c
+  }
+  // "白字" / "红字"
+  const beforeText = command.match(/(蓝|绿|红|橙|紫|黑|白|灰|浅蓝|浅灰|纯白|纯黑)色?字/)
+  if (beforeText) return getColorFromCommand(beforeText[1])
+  // "颜色改成蓝色" — 单独的颜色意图
+  const colorIntent = command.match(/颜色(?:改|变|换|设)(?:为|成)(.+?)(?:[，,;；]|$)/)
+  if (colorIntent) return getColorFromCommand(colorIntent[1])
+  return null
+}
+
+function extractBgColor(command) {
+  // "底色蓝色" / "背景改为红色" / "蓝底"
+  const bgPart = command.match(/(?:底色|背景色?|填充色)(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/)
+  if (bgPart) {
+    const c = getColorFromCommand(bgPart[1])
+    if (c) return c
+  }
+  // "蓝底"
+  const prefix = command.match(/(蓝|绿|红|橙|紫|黑|白|灰|浅蓝|浅灰|纯白|纯黑)底/)
+  if (prefix) return getColorFromCommand(prefix[1])
+  // "按钮改为蓝色" / "按钮变蓝"
+  const btnPart = command.match(/按钮(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/)
+  if (btnPart) return getColorFromCommand(btnPart[1])
+  return null
+}
+
 function applyVisualStyleCommand(command, style) {
   const color = getColorFromCommand(command)
   const remove = hasRemoveIntent(command)
@@ -86,13 +125,15 @@ function applyVisualStyleCommand(command, style) {
   if (hasBackgroundIntent(command)) {
     if (remove || (/透明/.test(command) && !/不是透明/.test(command))) {
       style.backgroundColor = 'transparent'
-    } else if (color) {
-      style.backgroundColor = color
+    } else {
+      const bgColor = extractBgColor(command) || color
+      if (bgColor) style.backgroundColor = bgColor
     }
   }
 
-  if (hasTextStyleIntent(command) && color) {
-    style.color = color
+  if (hasTextStyleIntent(command)) {
+    const textColor = extractTextColor(command) || color
+    if (textColor) style.color = textColor
   }
 
   if (/边框/.test(command)) {

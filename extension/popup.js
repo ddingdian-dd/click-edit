@@ -48,6 +48,8 @@ btn.addEventListener('click', async () => {
   try {
     if (newState) {
       await injectEditor(tab.id)
+      const domain = new URL(tab.url || '').hostname || ''
+      chrome.runtime.sendMessage({ type: 'ce_ping', domain })
     } else {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },

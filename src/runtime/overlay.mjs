@@ -1,28 +1,37 @@
 import { hasLayoutIntent, hasPageSizeIntent, isParsedCommandEmpty, parseVisualCommand } from '../core/commands.mjs'
-import { applyEdit, createEditRecord, readStoredEdits, readStoredEditsForPath, saveEdit, STORAGE_KEY, undoLastEdit, undoToEdit } from '../core/edits.mjs'
+import { applyEdit, createEditRecord, markExported, readStoredEdits, readStoredEditsForPath, saveEdit, STORAGE_KEY, undoLastEdit, undoToEdit } from '../core/edits.mjs'
 import { getElementLabel } from '../core/selectors.mjs'
 import { renderPropertiesPanel, getPropertiesPanelStyles } from './properties-panel.mjs'
 import { llmParseCommand, getApiKey, setApiKey } from '../core/llm-command.mjs'
-import { trackUnrecognized, getPendingCount, autoReport } from '../core/analytics.mjs'
+import { trackUnrecognized, trackMisparsed, getPendingCount, autoReport } from '../core/analytics.mjs'
 
 const ROOT_ID = 'click-edit-root'
 const HOVER_OUTLINE_ID = 'click-edit-hover-outline'
 const SELECTED_OUTLINE_ID = 'click-edit-selected-outline'
 const SAVE_SERVER = 'http://localhost:17532/save'
 
-function saveHtmlToFile() {
-  if (!window.location.href.startsWith('file://')) return
+// file:// 页面下尝试静默写回原文件；返回:
+//   'saved'        — 写入成功
+//   'unsupported'  — 非 file:// 页面，不需要写
+//   'no-server'    — 是 file:// 但 save-server 没启动
+async function saveHtmlToFile() {
+  if (!window.location.href.startsWith('file://')) return 'unsupported'
   const clone = document.documentElement.cloneNode(true)
   const editorRoot = clone.querySelector(`#${ROOT_ID}`)
   if (editorRoot) editorRoot.remove()
   clone.querySelectorAll(`#${HOVER_OUTLINE_ID}, #${SELECTED_OUTLINE_ID}`).forEach(el => el.remove())
   clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'))
   const html = '<!DOCTYPE html>\n' + clone.outerHTML
-  fetch(SAVE_SERVER, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filePath: window.location.href, html })
-  }).catch(() => {})
+  try {
+    const res = await fetch(SAVE_SERVER, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: window.location.href, html })
+    })
+    return res.ok ? 'saved' : 'no-server'
+  } catch {
+    return 'no-server'
+  }
 }
 
 function isEditableTarget(target) {
@@ -115,7 +124,9 @@ function updateOutline(outline, element) {
 
 function renderPanel(shadow, state) {
   const history = readStoredEditsForPath()
-  const recentHistory = history.slice(-5).reverse()
+  const recentHistory = history.slice(-5).reverse() // 倒序：最新在前
+  const newCount = history.filter(item => !item.exportedAt).length
+  const exportedCount = history.length - newCount
   const propertiesHtml = state.activeTab === 'properties' ? renderPropertiesPanel(state.selected, state.expandedGroups) : ''
 
   shadow.innerHTML = `
@@ -214,49 +225,28 @@ function renderPanel(shadow, state) {
       .history-copy { min-width: 0; }
       .history-command { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .history-meta { margin-top: 3px; color: #8f959e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-      .empty-history { color: #8f959e; font-size: 12px; }
-
-      .layer-picker { padding: 8px 16px 0; }
-      .layer-picker-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-      .layer-picker-title { font: 600 12px/1.3 inherit; color: #646a73; flex: 1; }
-      .layer-picker-back {
-        display: inline-flex; align-items: center; gap: 2px;
-        height: 24px; padding: 0 10px;
-        border: 1px solid #d8dadf;
-        border-radius: 999px;
-        background: #fff;
-        color: #1f2329;
-        font: 500 12px/1 inherit;
-        cursor: pointer;
-        flex-shrink: 0;
+      .history-item--exported { background: #fafbff; opacity: .85; }
+      .history-item--exported .history-command::before {
+        content: '已导出 · ';
+        color: #3370ff;
+        font-weight: 600;
       }
-      .layer-picker-back:hover { background: #f6f6fb; border-color: #c1c4ca; }
-      .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
-      .layer-item {
+      .history-divider {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 12px;
-        border-radius: 10px;
-        background: #f6f6fb;
-        cursor: pointer;
-        transition: background .1s;
+        gap: 8px;
+        margin: 4px 2px;
+        font-size: 11px;
+        color: #8f959e;
       }
-      .layer-item:hover { background: #e8efff; box-shadow: inset 0 0 0 1px #3370ff; }
-      .layer-item--depth {
-        width: 24px;
-        height: 24px;
-        border-radius: 6px;
-        background: #3370ff;
-        color: #fff;
-        font: 700 11px/24px inherit;
-        text-align: center;
-        flex-shrink: 0;
+      .history-divider::before,
+      .history-divider::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: #eef0f3;
       }
-      .layer-item--info { min-width: 0; flex: 1; }
-      .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
-      .layer-item--text { font-size: 12px; line-height: 1.4; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .layer-item--size { font-size: 12px; line-height: 1; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+      .empty-history { color: #8f959e; font-size: 12px; }
 
       button {
         border: 0;
@@ -266,6 +256,7 @@ function renderPanel(shadow, state) {
         cursor: pointer;
       }
       .primary { color: #fff; background: #3370ff; }
+      .primary:disabled { background: #c9cdd4; cursor: not-allowed; opacity: 0.6; }
       .secondary { color: #1f2329; background: #f0f1f5; }
       .mini { padding: 8px 11px; font-size: 12px; }
 
@@ -278,39 +269,11 @@ function renderPanel(shadow, state) {
       <div class="header">
         <div>
           <div class="title">Click-Edit</div>
-          <div class="status">${state.status}</div>
+          <div class="status">${escapeHtml(state.status || '')}</div>
         </div>
         <button class="collapse-btn" data-action="collapse" title="收起">&times;</button>
       </div>`}
       <div class="body">
-        ${state.layerCandidates ? `
-          <div class="layer-picker">
-            <div class="layer-picker-header">
-              <button class="layer-picker-back" data-action="cancel-layer-pick" title="返回（Esc）">返回</button>
-              <div class="layer-picker-title">点击位置有 ${state.layerCandidates.length} 个图层（从上到下）</div>
-            </div>
-            <div class="layer-list">
-              ${state.layerCandidates.map((el, i) => {
-                const tag = el.tagName.toLowerCase()
-                const cls = el.className ? '.' + el.className.toString().split(/\s+/).filter(Boolean).slice(0, 2).join('.') : ''
-                const id = el.id ? '#' + el.id : ''
-                const text = el.innerText?.trim().replace(/\s+/g, ' ').slice(0, 50) || ''
-                const rect = el.getBoundingClientRect()
-                const size = `${Math.round(rect.width)}×${Math.round(rect.height)}`
-                return `
-                  <div class="layer-item" data-action="pick-layer" data-layer-index="${i}">
-                    <div class="layer-item--depth">${i + 1}</div>
-                    <div class="layer-item--info">
-                      <div class="layer-item--tag">${escapeHtml(tag + id + cls)}</div>
-                      ${text ? `<div class="layer-item--text">${escapeHtml(text)}</div>` : ''}
-                    </div>
-                    <div class="layer-item--size">${size}</div>
-                  </div>
-                `
-              }).join('')}
-            </div>
-          </div>
-        ` : `
         <div class="tabs">
           <button class="tab ${state.activeTab === 'properties' ? 'tab--active' : 'tab--inactive'}" data-action="tab-properties">属性面板</button>
           <button class="tab ${state.activeTab === 'nlp' ? 'tab--active' : 'tab--inactive'}" data-action="tab-nlp">快捷输入</button>
@@ -321,33 +284,45 @@ function renderPanel(shadow, state) {
             <textarea placeholder="任意描述修改，如：底色改为纯白色；字号放大到20px；增加一个按钮；删除这个元素"></textarea>
             <div class="nlp-actions">
               <span class="spacer"></span>
-              <button class="secondary" data-action="apply">应用修改</button>
-              <button class="primary" data-action="save-html">保存</button>
+              <button class="primary" data-action="apply" title="回车 ↵ 也可触发" disabled>应用</button>
             </div>
           </div>
         ` : ''}
         ${history.length ? `
           <div class="footer">
             <div class="footer-actions">
-              <span style="font-size:11px;color:#8f959e;">记录 ${history.length}</span>
+              <span style="font-size:12px;color:#1f2329;font-weight:700;">修改记录 ${history.length}${newCount && exportedCount ? ` <span style="font-weight:400;color:#8f959e;">（新增 ${newCount} · 已导出 ${exportedCount}）</span>` : ''}</span>
               <span class="spacer"></span>
               <button class="secondary mini" data-action="reset">重置</button>
-              <button class="secondary mini" data-action="export">导出</button>
+              <button class="secondary mini" data-action="export" title="导出修改项 Markdown，可直接给开发">导出修改项${newCount ? ` (${newCount})` : ''}</button>
             </div>
             <div class="history">
-              <div class="history-list">${recentHistory.map((item, index) => `
-                <div class="history-item">
-                  <div class="history-copy">
-                    <div class="history-command" title="${escapeHtml(item.command || '未命名修改')}">${escapeHtml(item.command || '未命名修改')}</div>
-                    <div class="history-meta">${escapeHtml([index === 0 ? '最新' : formatHistoryTime(item.createdAt), item.label].filter(Boolean).join(' · '))}</div>
-                  </div>
-                  <button class="secondary mini" data-action="rollback" data-edit-id="${escapeHtml(item.id)}">回退</button>
-                </div>
-              `).join('')}</div>
+              <div class="history-list">${(() => {
+                const blocks = []
+                let lastExported = null
+                recentHistory.forEach((item, index) => {
+                  const isExported = !!item.exportedAt
+                  // 若与上一条已导出/未导出状态切换，插入分割线
+                  if (lastExported !== null && lastExported !== isExported) {
+                    blocks.push(`<div class="history-divider">${isExported ? '已导出' : '本次新增'}</div>`)
+                  }
+                  lastExported = isExported
+                  const meta = [index === 0 ? '最新' : formatHistoryTime(item.createdAt), item.label].filter(Boolean).join(' · ')
+                  blocks.push(`
+                    <div class="history-item ${isExported ? 'history-item--exported' : ''}">
+                      <div class="history-copy">
+                        <div class="history-command" title="${escapeHtml(item.command || '未命名修改')}">${escapeHtml(item.command || '未命名修改')}</div>
+                        <div class="history-meta">${escapeHtml(meta)}</div>
+                      </div>
+                      <button class="secondary mini" data-action="rollback" data-edit-id="${escapeHtml(item.id)}">回退</button>
+                    </div>
+                  `)
+                })
+                return blocks.join('')
+              })()}</div>
             </div>
           </div>
         ` : ''}
-        `}
       </div>
     </section>
   `
@@ -379,7 +354,6 @@ export function initClickEdit(options = {}) {
     collapsed: false,
     hovered: null,
     selected: null,
-    layerCandidates: null,
     status: '点击页面元素开始编辑。',
     activeTab: 'nlp',
     expandedGroups: new Set(['color']),
@@ -441,11 +415,9 @@ export function initClickEdit(options = {}) {
   }
 
   function onMouseMove(event) {
-    if (!state.enabled) return
+    if (!state.enabled || state.collapsed) return
     state.hovered = isEditableTarget(event.target) ? event.target : null
     updateOutline(hoverOutline, state.hovered && state.hovered !== state.selected ? state.hovered : null)
-    // 图层选择器期间，selectedOutline 由弹窗 mouseover 接管（橙色对照），不在这里覆盖
-    if (state.layerCandidates) return
     updateOutline(selectedOutline, state.selected)
   }
 
@@ -489,7 +461,7 @@ export function initClickEdit(options = {}) {
   }
 
   function onDblClick(event) {
-    if (!state.enabled || !isEditableTarget(event.target)) return
+    if (!state.enabled || state.collapsed || !isEditableTarget(event.target)) return
     if (!isTextNode(event.target)) return
     event.preventDefault()
     event.stopPropagation()
@@ -531,20 +503,14 @@ export function initClickEdit(options = {}) {
 
   function selectElement(el) {
     state.selected = el
-    state.layerCandidates = null
     state.status = `已选中：${getElementLabel(el)}`
     updateOutline(hoverOutline, null)
     updateOutline(selectedOutline, state.selected)
     rerender()
   }
 
-  function getLayerCandidates(x, y) {
-    const elements = document.elementsFromPoint(x, y)
-    return elements.filter(el => isEditableTarget(el))
-  }
-
   function onClick(event) {
-    if (!state.enabled || !isEditableTarget(event.target)) return
+    if (!state.enabled || state.collapsed || !isEditableTarget(event.target)) return
     event.preventDefault()
     event.stopPropagation()
 
@@ -557,17 +523,7 @@ export function initClickEdit(options = {}) {
       return
     }
 
-    const candidates = getLayerCandidates(event.clientX, event.clientY)
-
-    if (candidates.length > 1) {
-      state.layerCandidates = candidates
-      state.status = `检测到 ${candidates.length} 个重叠图层，请在面板中选择`
-      updateOutline(hoverOutline, null)
-      updateOutline(selectedOutline, null)
-      rerender()
-      return
-    }
-
+    // 点击了不同元素，直接切换选中
     selectElement(event.target)
   }
 
@@ -613,64 +569,211 @@ export function initClickEdit(options = {}) {
     const record = createEditRecord({ element: target, command, parsed })
     applyEdit(record)
     saveEdit(record)
-    saveHtmlToFile()
     state.selected = target
     updateOutline(selectedOutline, state.selected)
-    setStatus(`已应用：${command}`)
+    const saveResult = await saveHtmlToFile()
+    if (saveResult === 'saved') setStatus(`已应用：${command} · 已写入文件`)
+    else setStatus(`已应用：${command}`)
     return record
   }
 
-  function exportHtml() {
-    const clone = document.documentElement.cloneNode(true)
-    const editorRoot = clone.querySelector(`#${ROOT_ID}`)
-    if (editorRoot) editorRoot.remove()
-    const hoverEl = clone.querySelector(`#${HOVER_OUTLINE_ID}`)
-    if (hoverEl) hoverEl.remove()
-    const selectedEl = clone.querySelector(`#${SELECTED_OUTLINE_ID}`)
-    if (selectedEl) selectedEl.remove()
-    clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'))
+  function getEditRect(record) {
+    try {
+      const el = document.querySelector(record.selector)
+      if (!el) return undefined
+      const r = el.getBoundingClientRect()
+      return {
+        x: Math.round(r.left + window.scrollX),
+        y: Math.round(r.top + window.scrollY),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      }
+    } catch {
+      return undefined
+    }
+  }
 
-    const html = '<!DOCTYPE html>\n' + clone.outerHTML
-    const blob = new Blob([html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
+  function describeEditChange(record) {
+    const parts = []
+    const styleEntries = Object.entries(record.style || {}).filter(([, v]) => v !== undefined)
+    for (const [key, after] of styleEntries) {
+      const cssKey = toCssPropertyName(key)
+      const before = record.before?.style?.[key]
+      parts.push({ kind: 'style', property: cssKey, before: before || '(未设置)', after })
+    }
+    if (record.text !== undefined) {
+      parts.push({ kind: 'text', before: record.before?.text ?? '', after: record.text })
+    }
+    if (record.hidden !== undefined) {
+      parts.push({ kind: 'visibility', before: record.hidden ? '显示' : '隐藏', after: record.hidden ? '隐藏' : '显示' })
+    }
+    if (record.order) {
+      parts.push({ kind: 'order', after: record.order })
+    }
+    if (record.insert) {
+      parts.push({ kind: 'insert', after: record.insert })
+    }
+    return parts
+  }
+
+  function buildEditList() {
+    const records = readStoredEditsForPath()
+    return records.map((record, index) => ({
+      index: index + 1,
+      selector: record.selector,
+      label: record.label,
+      command: record.command,
+      changes: describeEditChange(record),
+      rect: getEditRect(record),
+      source: record.source,
+      createdAt: record.createdAt,
+      exportedAt: record.exportedAt,
+    }))
+  }
+
+  function renderEditItem(lines, item) {
+    lines.push(`### ${item.index}. ${item.label || item.selector}`)
+    lines.push('')
+    if (item.command) lines.push(`> **指令**: ${item.command}`)
+    lines.push('')
+    lines.push(`- selector: \`${item.selector}\``)
+    if (item.source) lines.push(`- 源码提示: \`${item.source}\``)
+    if (item.rect) lines.push(`- 元素位置（页面坐标）: x=${item.rect.x}, y=${item.rect.y}, w=${item.rect.w}, h=${item.rect.h}`)
+    lines.push('')
+    lines.push('**改动**:')
+    item.changes.forEach(change => {
+      const line = formatChangeLine(change)
+      if (line) lines.push(line)
+    })
+    lines.push('')
+  }
+
+  function formatChangeLine(change) {
+    if (change.kind === 'style') {
+      return `- ${change.property}: \`${change.before}\` → \`${change.after}\``
+    }
+    if (change.kind === 'text') {
+      return `- 文案: "${change.before}" → "${change.after}"`
+    }
+    if (change.kind === 'visibility') {
+      return `- 显隐: ${change.before} → ${change.after}`
+    }
+    if (change.kind === 'order') {
+      const map = { up: '上移一位', down: '下移一位', first: '移到首位', last: '移到末位' }
+      return `- 排序: ${map[change.after] || change.after}`
+    }
+    if (change.kind === 'insert') {
+      return `- 新增同级元素，文本: "${change.after}"`
+    }
+    return ''
+  }
+
+  async function exportEditList() {
+    const list = buildEditList()
+    if (!list.length) {
+      setStatus('当前页面没有可导出的修改。')
+      return
+    }
+
+    const previouslyExported = list.filter(item => item.exportedAt)
+    const newlyAdded = list.filter(item => !item.exportedAt)
+
+    const url = window.location.href
+    const title = document.title || ''
+    const exportedAt = new Date().toISOString()
+    const lines = []
+    lines.push(`# Click-Edit 修改清单`)
+    lines.push('')
+    lines.push(`- 页面: ${title}`)
+    lines.push(`- URL: ${url}`)
+    lines.push(`- 导出时间: ${exportedAt}`)
+    lines.push(`- 修改条数: ${list.length}（本次新增 ${newlyAdded.length}，历史已导出 ${previouslyExported.length}）`)
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+
+    if (newlyAdded.length) {
+      lines.push(`## 🆕 本次新增（${newlyAdded.length} 条）`)
+      lines.push('')
+      lines.push('> 上次导出之后产生的修改，开发优先看这一段。')
+      lines.push('')
+      newlyAdded.forEach(item => renderEditItem(lines, item))
+      lines.push('---')
+      lines.push('')
+    }
+
+    if (previouslyExported.length) {
+      lines.push(`## ✅ 已导出过（${previouslyExported.length} 条）`)
+      lines.push('')
+      lines.push('> 之前已经导出过的修改，留在这里供完整对照。')
+      lines.push('')
+      previouslyExported.forEach(item => renderEditItem(lines, item))
+      lines.push('---')
+      lines.push('')
+    }
+
+    lines.push('## 原始数据（JSON，可直接喂给脚本）')
+    lines.push('')
+    lines.push('```json')
+    lines.push(JSON.stringify({
+      url,
+      title,
+      exportedAt,
+      summary: { total: list.length, newlyAdded: newlyAdded.length, previouslyExported: previouslyExported.length },
+      edits: list,
+    }, null, 2))
+    lines.push('```')
+    lines.push('')
+
+    const md = lines.join('\n')
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const pageName = (document.title || 'page').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
+    const suggestedName = `click-edit-${pageName}.md`
+
+    let summary
+    if (newlyAdded.length && previouslyExported.length) {
+      summary = `本次新增 ${newlyAdded.length} 条，含历史 ${previouslyExported.length} 条`
+    } else if (newlyAdded.length) {
+      summary = `${newlyAdded.length} 条修改`
+    } else {
+      summary = `${previouslyExported.length} 条历史修改，无新增`
+    }
+
+    // 优先用 showSaveFilePicker 让用户主动选保存路径
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [{ description: 'Markdown 文件', accept: { 'text/markdown': ['.md'] } }],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+        markExported(undefined, exportedAt)
+        rerender()
+        setStatus(`保存成功：${handle.name}（${summary}）`)
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          setStatus('已取消保存。')
+        } else {
+          setStatus(`保存失败：${err.message || err}`)
+        }
+      }
+      return
+    }
+
+    // 旧浏览器回退方案：直接下载到默认下载文件夹
+    const objectUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
-    const pageName = document.title || 'page'
-    link.download = `${pageName}.html`
+    link.href = objectUrl
+    link.download = suggestedName
     document.body.appendChild(link)
     link.click()
     link.remove()
-    URL.revokeObjectURL(url)
-    setStatus('已导出修改后的 HTML 文件。')
-  }
-
-  async function saveHtmlDirect() {
-    if (!window.location.href.startsWith('file://')) {
-      setStatus('保存仅支持本地 file:// 页面。')
-      return
-    }
-    const clone = document.documentElement.cloneNode(true)
-    const editorRoot = clone.querySelector(`#${ROOT_ID}`)
-    if (editorRoot) editorRoot.remove()
-    clone.querySelectorAll(`#${HOVER_OUTLINE_ID}, #${SELECTED_OUTLINE_ID}`).forEach(el => el.remove())
-    clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'))
-    const html = '<!DOCTYPE html>\n' + clone.outerHTML
-
-    try {
-      const res = await fetch(SAVE_SERVER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: window.location.href, html })
-      })
-      if (res.ok) {
-        setStatus('已保存到文件。')
-      } else {
-        const data = await res.json().catch(() => ({}))
-        setStatus(`保存失败：${data.error || res.statusText}`)
-      }
-    } catch {
-      setStatus('保存失败：请先运行 npm run save-server')
-    }
+    URL.revokeObjectURL(objectUrl)
+    markExported(undefined, exportedAt)
+    rerender()
+    setStatus(`已下载 ${suggestedName}（${summary}），请到浏览器默认下载文件夹查收`)
   }
 
   function undoEdit() {
@@ -678,6 +781,11 @@ export function initClickEdit(options = {}) {
     if (!record) {
       setStatus('没有可撤销的修改。')
       return undefined
+    }
+    if (record.command) {
+      const el = document.querySelector(record.selector)
+      const ctx = el ? { tag: el.tagName.toLowerCase(), text: el.innerText?.slice(0, 50) } : null
+      trackMisparsed(record.command, ctx, JSON.stringify(record.style || {}))
     }
     setStatus(`已撤销：${record.command || record.label || '上一条修改'}`)
     return record
@@ -689,6 +797,13 @@ export function initClickEdit(options = {}) {
       setStatus('无法回退这条记录，请确认元素仍在当前页面。')
       return []
     }
+    records.forEach(record => {
+      if (record.command) {
+        const el = document.querySelector(record.selector)
+        const ctx = el ? { tag: el.tagName.toLowerCase(), text: el.innerText?.slice(0, 50) } : null
+        trackMisparsed(record.command, ctx, JSON.stringify(record.style || {}))
+      }
+    })
     setStatus(`已回退 ${records.length} 条修改。`)
     return records
   }
@@ -702,8 +817,20 @@ export function initClickEdit(options = {}) {
     const trigger = event.target?.closest?.('[data-action]')
     const action = trigger?.getAttribute?.('data-action')
 
-    if (action === 'collapse') { state.collapsed = true; rerender(); return }
-    if (action === 'expand') { state.collapsed = false; rerender(); return }
+    if (action === 'collapse') {
+      state.collapsed = true
+      state.hovered = null
+      updateOutline(hoverOutline, null)
+      updateOutline(selectedOutline, null)
+      rerender()
+      return
+    }
+    if (action === 'expand') {
+      state.collapsed = false
+      updateOutline(selectedOutline, state.selected)
+      rerender()
+      return
+    }
     if (action === 'toggle') {
       state.enabled = !state.enabled
       if (!state.enabled) {
@@ -721,21 +848,8 @@ export function initClickEdit(options = {}) {
     if (action === 'apply') { applyCommand(); return }
     if (action === 'undo') { undoEdit(); return }
     if (action === 'rollback') { rollbackEdit(trigger.getAttribute('data-edit-id')); return }
-    if (action === 'export') { exportHtml(); return }
-    if (action === 'save-html') { saveHtmlDirect(); return }
+    if (action === 'export') { exportEditList(); return }
     if (action === 'reset') { resetEdits(); return }
-    if (action === 'pick-layer') {
-      const idx = parseInt(trigger.getAttribute('data-layer-index'), 10)
-      const el = state.layerCandidates?.[idx]
-      if (el) selectElement(el)
-      return
-    }
-    if (action === 'cancel-layer-pick') {
-      state.layerCandidates = null
-      state.status = '已取消选择，点击页面元素重新选取。'
-      rerender()
-      return
-    }
 
     // group fold/unfold
     const groupHeader = event.target?.closest?.('.group-header')
@@ -765,33 +879,17 @@ export function initClickEdit(options = {}) {
     }
   })
 
-  shadow.addEventListener('mouseover', event => {
-    const layerItem = event.target?.closest?.('.layer-item')
-    if (layerItem && state.layerCandidates) {
-      const idx = parseInt(layerItem.getAttribute('data-layer-index'), 10)
-      const el = state.layerCandidates[idx]
-      if (el) {
-        // 用橙色高亮，比品牌蓝在多种背景上都更醒目
-        selectedOutline.style.border = '2px solid #ff7d00'
-        selectedOutline.style.boxShadow = '0 0 0 4px rgba(255,125,0,.18)'
-        updateOutline(selectedOutline, el)
-      }
-    }
-  })
-
-  shadow.addEventListener('mouseout', event => {
-    const layerItem = event.target?.closest?.('.layer-item')
-    if (layerItem && state.layerCandidates) {
-      // 离开候选项后清空 outline，并把样式恢复回品牌蓝（默认选中态用）
-      selectedOutline.style.border = '2px solid #3370ff'
-      selectedOutline.style.boxShadow = '0 0 0 4px rgba(51,112,255,.14)'
-      updateOutline(selectedOutline, state.selected)
-    }
-  })
-
   // 实时预览：input 事件直接操作 DOM style，不产生记录
   shadow.addEventListener('input', event => {
     const target = event.target
+
+    // textarea 输入时切换应用按钮状态
+    if (target.matches?.('textarea')) {
+      const applyBtn = shadow.querySelector('[data-action="apply"]')
+      if (applyBtn) applyBtn.disabled = !target.value.trim()
+      return
+    }
+
     if (!state.selected) return
 
     if (target.type === 'color' && target.dataset.property) {
@@ -889,20 +987,9 @@ export function initClickEdit(options = {}) {
     }
   })
 
-  function onGlobalKeydown(event) {
-    if (event.key !== 'Escape') return
-    if (state.layerCandidates) {
-      event.preventDefault()
-      state.layerCandidates = null
-      state.status = '已取消选择，点击页面元素重新选取。'
-      rerender()
-    }
-  }
-
   document.addEventListener('mousemove', onMouseMove, true)
   document.addEventListener('click', onClick, true)
   document.addEventListener('dblclick', onDblClick, true)
-  document.addEventListener('keydown', onGlobalKeydown, true)
 
   readStoredEdits().forEach(record => applyEdit(record))
   rerender()
@@ -912,14 +999,13 @@ export function initClickEdit(options = {}) {
       document.removeEventListener('mousemove', onMouseMove, true)
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('dblclick', onDblClick, true)
-      document.removeEventListener('keydown', onGlobalKeydown, true)
       if (editingElement) commitTextEdit()
       root.remove()
       hoverOutline.remove()
       selectedOutline.remove()
       delete window.__CLICK_EDIT__
     },
-    exportHtml: () => exportHtml(),
+    exportEditList: () => exportEditList(),
     history: () => readStoredEditsForPath(),
     applyToElement: (element, command) => applyCommandToElement(element, command),
     undo: () => undoEdit(),

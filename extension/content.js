@@ -39,12 +39,18 @@
     return command.match(/[“"]([^”"]+)[”"]/)?.[1] || command.match(/[改换](?:成|为)(.+)$/)?.[1]?.trim();
   }
   function hasTextStyleIntent(command) {
-    return /文字颜色|字体颜色|字色/.test(command);
+    return /文字颜色|字体颜色|字色|文字(?:改|变|换|设)?(?:为|成)?(?:蓝|绿|红|橙|紫|黑|白|灰|#)|(?:^|[，,；;])字(?:改|变|换|设)?(?:为|成)?(?:蓝|绿|红|橙|紫|黑|白|灰|#)|(?:蓝|绿|红|橙|紫|黑|白|灰)色?字|颜色(?:改|变|换|设)(?:为|成)/.test(command);
   }
   function hasBackgroundIntent(command) {
-    return /背景色?|底色|填充色|(?:蓝|绿|红|橙|紫|黑|白|灰|浅灰|纯白|纯黑)底/.test(command);
+    if (/^颜色/.test(command)) return false;
+    return /背景色?|底色|填充色|(?:蓝|绿|红|橙|紫|黑|白|灰|浅灰|纯白|纯黑)底|按钮(?:改|变|换|设)(?:为|成)|(?:变|改成?|换成?)(?:蓝|绿|红|橙|紫|黑|白|灰)色?(?:按钮|背景|底)?/.test(command);
+  }
+  function hasTextColorIntent(command) {
+    return /(?:文字|字体?|文本).*(?:蓝|绿|红|橙|紫|黑|白|灰|#[0-9a-fA-F])|(?:蓝|绿|红|橙|紫|黑|白|灰)(?:色)?字|颜色(?:改|换|设)(?:为|成)/.test(command);
   }
   function hasTextContentIntent(command) {
+    if (hasTextColorIntent(command)) return false;
+    if (hasBackgroundIntent(command)) return false;
     return command.includes("\u6587\u6848") || command.includes("\u6587\u5B57") && !hasTextStyleIntent(command);
   }
   function hasGlassIntent(command) {
@@ -67,18 +73,44 @@
     if (!match) return void 0;
     return `${match[1]}${match[2] || "px"}`;
   }
+  function extractTextColor(command) {
+    const afterText = command.match(/(?:文字|字体?|文本)(?:颜色)?(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/);
+    if (afterText) {
+      const c = getColorFromCommand(afterText[1]);
+      if (c) return c;
+    }
+    const beforeText = command.match(/(蓝|绿|红|橙|紫|黑|白|灰|浅蓝|浅灰|纯白|纯黑)色?字/);
+    if (beforeText) return getColorFromCommand(beforeText[1]);
+    const colorIntent = command.match(/颜色(?:改|变|换|设)(?:为|成)(.+?)(?:[，,;；]|$)/);
+    if (colorIntent) return getColorFromCommand(colorIntent[1]);
+    return null;
+  }
+  function extractBgColor(command) {
+    const bgPart = command.match(/(?:底色|背景色?|填充色)(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/);
+    if (bgPart) {
+      const c = getColorFromCommand(bgPart[1]);
+      if (c) return c;
+    }
+    const prefix = command.match(/(蓝|绿|红|橙|紫|黑|白|灰|浅蓝|浅灰|纯白|纯黑)底/);
+    if (prefix) return getColorFromCommand(prefix[1]);
+    const btnPart = command.match(/按钮(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/);
+    if (btnPart) return getColorFromCommand(btnPart[1]);
+    return null;
+  }
   function applyVisualStyleCommand(command, style) {
     const color = getColorFromCommand(command);
     const remove = hasRemoveIntent(command);
     if (hasBackgroundIntent(command)) {
       if (remove || /透明/.test(command) && !/不是透明/.test(command)) {
         style.backgroundColor = "transparent";
-      } else if (color) {
-        style.backgroundColor = color;
+      } else {
+        const bgColor = extractBgColor(command) || color;
+        if (bgColor) style.backgroundColor = bgColor;
       }
     }
-    if (hasTextStyleIntent(command) && color) {
-      style.color = color;
+    if (hasTextStyleIntent(command)) {
+      const textColor = extractTextColor(command) || color;
+      if (textColor) style.color = textColor;
     }
     if (/边框/.test(command)) {
       style.border = remove ? "0" : `1px solid ${color || "#3370ff"}`;
@@ -383,6 +415,19 @@
     const records = readStoredEdits();
     records.push(record);
     writeStoredEdits(records);
+    return records;
+  }
+  function markExported(path = getCurrentPath(), exportedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const records = readStoredEdits();
+    let dirty = false;
+    for (const record of records) {
+      if (!recordMatchesPath(record, path)) continue;
+      if (!record.exportedAt) {
+        record.exportedAt = exportedAt;
+        dirty = true;
+      }
+    }
+    if (dirty) writeStoredEdits(records);
     return records;
   }
   function undoLastEdit(root = document) {
@@ -945,10 +990,18 @@
     localStorage.setItem(STORAGE_KEY2, JSON.stringify(records));
   }
   function trackUnrecognized(command, elementContext) {
+    track("unrecognized", command, elementContext);
+  }
+  function trackMisparsed(command, elementContext, appliedResult) {
+    track("misparsed", command, elementContext, appliedResult);
+  }
+  function track(type, command, elementContext, appliedResult) {
     const records = readRecords();
     records.push({
+      type,
       command,
       element: elementContext ? `<${elementContext.tag}> "${elementContext.text?.slice(0, 50)}"` : null,
+      applied: appliedResult || null,
       url: location.href,
       time: (/* @__PURE__ */ new Date()).toISOString()
     });
@@ -960,21 +1013,43 @@
   function autoReport() {
     const records = readRecords();
     if (!records.length) return;
+    const unrecognized = records.filter((r) => r.type === "unrecognized");
+    const misparsed = records.filter((r) => r.type === "misparsed");
+    const sections = [];
+    if (unrecognized.length) {
+      sections.push(
+        `### \u672A\u8BC6\u522B (${unrecognized.length} \u6761)`,
+        "",
+        "| \u6307\u4EE4 | \u5143\u7D20 | \u9875\u9762 | \u65F6\u95F4 |",
+        "|------|------|------|------|",
+        ...unrecognized.map(
+          (r) => `| ${r.command} | ${r.element || "-"} | ${r.url?.split("/").pop() || "-"} | ${r.time?.slice(0, 16)} |`
+        )
+      );
+    }
+    if (misparsed.length) {
+      sections.push(
+        "",
+        `### \u89E3\u6790\u9519\u8BEF (${misparsed.length} \u6761)`,
+        "",
+        "| \u6307\u4EE4 | \u5B9E\u9645\u6548\u679C | \u5143\u7D20 | \u65F6\u95F4 |",
+        "|------|---------|------|------|",
+        ...misparsed.map(
+          (r) => `| ${r.command} | ${r.applied || "-"} | ${r.element || "-"} | ${r.time?.slice(0, 16)} |`
+        )
+      );
+    }
     const body = [
-      "## \u672A\u8BC6\u522B\u6307\u4EE4\u4E0A\u62A5",
+      "## \u6307\u4EE4\u95EE\u9898\u4E0A\u62A5",
       "",
-      `\u5171 ${records.length} \u6761\uFF0C\u81EA\u52A8\u6536\u96C6\u3002`,
+      `\u5171 ${records.length} \u6761\uFF08\u672A\u8BC6\u522B ${unrecognized.length} + \u89E3\u6790\u9519\u8BEF ${misparsed.length}\uFF09\uFF0C\u81EA\u52A8\u6536\u96C6\u3002`,
       "",
-      "| \u6307\u4EE4 | \u5143\u7D20 | \u9875\u9762 | \u65F6\u95F4 |",
-      "|------|------|------|------|",
-      ...records.map(
-        (r) => `| ${r.command} | ${r.element || "-"} | ${r.url?.split("/").pop() || "-"} | ${r.time?.slice(0, 16)} |`
-      ),
+      ...sections,
       "",
       "---",
       "Auto-reported by Click-Edit analytics"
     ].join("\n");
-    const title = `[Analytics] ${records.length} \u6761\u672A\u8BC6\u522B\u6307\u4EE4 (${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)})`;
+    const title = `[Analytics] ${records.length} \u6761\u6307\u4EE4\u95EE\u9898 (${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)})`;
     const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
       title,
       body,
@@ -989,20 +1064,24 @@
   var HOVER_OUTLINE_ID = "click-edit-hover-outline";
   var SELECTED_OUTLINE_ID = "click-edit-selected-outline";
   var SAVE_SERVER = "http://localhost:17532/save";
-  function saveHtmlToFile() {
-    if (!window.location.href.startsWith("file://")) return;
+  async function saveHtmlToFile() {
+    if (!window.location.href.startsWith("file://")) return "unsupported";
     const clone = document.documentElement.cloneNode(true);
     const editorRoot = clone.querySelector(`#${ROOT_ID}`);
     if (editorRoot) editorRoot.remove();
     clone.querySelectorAll(`#${HOVER_OUTLINE_ID}, #${SELECTED_OUTLINE_ID}`).forEach((el) => el.remove());
     clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
     const html = "<!DOCTYPE html>\n" + clone.outerHTML;
-    fetch(SAVE_SERVER, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filePath: window.location.href, html })
-    }).catch(() => {
-    });
+    try {
+      const res = await fetch(SAVE_SERVER, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: window.location.href, html })
+      });
+      return res.ok ? "saved" : "no-server";
+    } catch {
+      return "no-server";
+    }
   }
   function isEditableTarget(target) {
     if (!(target instanceof HTMLElement)) return false;
@@ -1063,6 +1142,8 @@
   function renderPanel(shadow, state) {
     const history = readStoredEditsForPath();
     const recentHistory = history.slice(-5).reverse();
+    const newCount = history.filter((item) => !item.exportedAt).length;
+    const exportedCount = history.length - newCount;
     const propertiesHtml = state.activeTab === "properties" ? renderPropertiesPanel(state.selected, state.expandedGroups) : "";
     shadow.innerHTML = `
     <style>
@@ -1160,49 +1241,28 @@
       .history-copy { min-width: 0; }
       .history-command { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .history-meta { margin-top: 3px; color: #8f959e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-      .empty-history { color: #8f959e; font-size: 12px; }
-
-      .layer-picker { padding: 8px 16px 0; }
-      .layer-picker-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-      .layer-picker-title { font: 600 12px/1.3 inherit; color: #646a73; flex: 1; }
-      .layer-picker-back {
-        display: inline-flex; align-items: center; gap: 2px;
-        height: 24px; padding: 0 10px;
-        border: 1px solid #d8dadf;
-        border-radius: 999px;
-        background: #fff;
-        color: #1f2329;
-        font: 500 12px/1 inherit;
-        cursor: pointer;
-        flex-shrink: 0;
+      .history-item--exported { background: #fafbff; opacity: .85; }
+      .history-item--exported .history-command::before {
+        content: '\u5DF2\u5BFC\u51FA \xB7 ';
+        color: #3370ff;
+        font-weight: 600;
       }
-      .layer-picker-back:hover { background: #f6f6fb; border-color: #c1c4ca; }
-      .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
-      .layer-item {
+      .history-divider {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 12px;
-        border-radius: 10px;
-        background: #f6f6fb;
-        cursor: pointer;
-        transition: background .1s;
+        gap: 8px;
+        margin: 4px 2px;
+        font-size: 11px;
+        color: #8f959e;
       }
-      .layer-item:hover { background: #e8efff; box-shadow: inset 0 0 0 1px #3370ff; }
-      .layer-item--depth {
-        width: 24px;
-        height: 24px;
-        border-radius: 6px;
-        background: #3370ff;
-        color: #fff;
-        font: 700 11px/24px inherit;
-        text-align: center;
-        flex-shrink: 0;
+      .history-divider::before,
+      .history-divider::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: #eef0f3;
       }
-      .layer-item--info { min-width: 0; flex: 1; }
-      .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
-      .layer-item--text { font-size: 12px; line-height: 1.4; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .layer-item--size { font-size: 12px; line-height: 1; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+      .empty-history { color: #8f959e; font-size: 12px; }
 
       button {
         border: 0;
@@ -1212,6 +1272,7 @@
         cursor: pointer;
       }
       .primary { color: #fff; background: #3370ff; }
+      .primary:disabled { background: #c9cdd4; cursor: not-allowed; opacity: 0.6; }
       .secondary { color: #1f2329; background: #f0f1f5; }
       .mini { padding: 8px 11px; font-size: 12px; }
 
@@ -1224,39 +1285,11 @@
       <div class="header">
         <div>
           <div class="title">Click-Edit</div>
-          <div class="status">${state.status}</div>
+          <div class="status">${escapeHtml(state.status || "")}</div>
         </div>
         <button class="collapse-btn" data-action="collapse" title="\u6536\u8D77">&times;</button>
       </div>`}
       <div class="body">
-        ${state.layerCandidates ? `
-          <div class="layer-picker">
-            <div class="layer-picker-header">
-              <button class="layer-picker-back" data-action="cancel-layer-pick" title="\u8FD4\u56DE\uFF08Esc\uFF09">\u8FD4\u56DE</button>
-              <div class="layer-picker-title">\u70B9\u51FB\u4F4D\u7F6E\u6709 ${state.layerCandidates.length} \u4E2A\u56FE\u5C42\uFF08\u4ECE\u4E0A\u5230\u4E0B\uFF09</div>
-            </div>
-            <div class="layer-list">
-              ${state.layerCandidates.map((el, i) => {
-      const tag = el.tagName.toLowerCase();
-      const cls = el.className ? "." + el.className.toString().split(/\s+/).filter(Boolean).slice(0, 2).join(".") : "";
-      const id = el.id ? "#" + el.id : "";
-      const text = el.innerText?.trim().replace(/\s+/g, " ").slice(0, 50) || "";
-      const rect = el.getBoundingClientRect();
-      const size = `${Math.round(rect.width)}\xD7${Math.round(rect.height)}`;
-      return `
-                  <div class="layer-item" data-action="pick-layer" data-layer-index="${i}">
-                    <div class="layer-item--depth">${i + 1}</div>
-                    <div class="layer-item--info">
-                      <div class="layer-item--tag">${escapeHtml(tag + id + cls)}</div>
-                      ${text ? `<div class="layer-item--text">${escapeHtml(text)}</div>` : ""}
-                    </div>
-                    <div class="layer-item--size">${size}</div>
-                  </div>
-                `;
-    }).join("")}
-            </div>
-          </div>
-        ` : `
         <div class="tabs">
           <button class="tab ${state.activeTab === "properties" ? "tab--active" : "tab--inactive"}" data-action="tab-properties">\u5C5E\u6027\u9762\u677F</button>
           <button class="tab ${state.activeTab === "nlp" ? "tab--active" : "tab--inactive"}" data-action="tab-nlp">\u5FEB\u6377\u8F93\u5165</button>
@@ -1267,33 +1300,44 @@
             <textarea placeholder="\u4EFB\u610F\u63CF\u8FF0\u4FEE\u6539\uFF0C\u5982\uFF1A\u5E95\u8272\u6539\u4E3A\u7EAF\u767D\u8272\uFF1B\u5B57\u53F7\u653E\u5927\u523020px\uFF1B\u589E\u52A0\u4E00\u4E2A\u6309\u94AE\uFF1B\u5220\u9664\u8FD9\u4E2A\u5143\u7D20"></textarea>
             <div class="nlp-actions">
               <span class="spacer"></span>
-              <button class="secondary" data-action="apply">\u5E94\u7528\u4FEE\u6539</button>
-              <button class="primary" data-action="save-html">\u4FDD\u5B58</button>
+              <button class="primary" data-action="apply" title="\u56DE\u8F66 \u21B5 \u4E5F\u53EF\u89E6\u53D1" disabled>\u5E94\u7528</button>
             </div>
           </div>
         ` : ""}
         ${history.length ? `
           <div class="footer">
             <div class="footer-actions">
-              <span style="font-size:11px;color:#8f959e;">\u8BB0\u5F55 ${history.length}</span>
+              <span style="font-size:12px;color:#1f2329;font-weight:700;">\u4FEE\u6539\u8BB0\u5F55 ${history.length}${newCount && exportedCount ? ` <span style="font-weight:400;color:#8f959e;">\uFF08\u65B0\u589E ${newCount} \xB7 \u5DF2\u5BFC\u51FA ${exportedCount}\uFF09</span>` : ""}</span>
               <span class="spacer"></span>
               <button class="secondary mini" data-action="reset">\u91CD\u7F6E</button>
-              <button class="secondary mini" data-action="export">\u5BFC\u51FA</button>
+              <button class="secondary mini" data-action="export" title="\u5BFC\u51FA\u4FEE\u6539\u9879 Markdown\uFF0C\u53EF\u76F4\u63A5\u7ED9\u5F00\u53D1">\u5BFC\u51FA\u4FEE\u6539\u9879${newCount ? ` (${newCount})` : ""}</button>
             </div>
             <div class="history">
-              <div class="history-list">${recentHistory.map((item, index) => `
-                <div class="history-item">
-                  <div class="history-copy">
-                    <div class="history-command" title="${escapeHtml(item.command || "\u672A\u547D\u540D\u4FEE\u6539")}">${escapeHtml(item.command || "\u672A\u547D\u540D\u4FEE\u6539")}</div>
-                    <div class="history-meta">${escapeHtml([index === 0 ? "\u6700\u65B0" : formatHistoryTime(item.createdAt), item.label].filter(Boolean).join(" \xB7 "))}</div>
-                  </div>
-                  <button class="secondary mini" data-action="rollback" data-edit-id="${escapeHtml(item.id)}">\u56DE\u9000</button>
-                </div>
-              `).join("")}</div>
+              <div class="history-list">${(() => {
+      const blocks = [];
+      let lastExported = null;
+      recentHistory.forEach((item, index) => {
+        const isExported = !!item.exportedAt;
+        if (lastExported !== null && lastExported !== isExported) {
+          blocks.push(`<div class="history-divider">${isExported ? "\u5DF2\u5BFC\u51FA" : "\u672C\u6B21\u65B0\u589E"}</div>`);
+        }
+        lastExported = isExported;
+        const meta = [index === 0 ? "\u6700\u65B0" : formatHistoryTime(item.createdAt), item.label].filter(Boolean).join(" \xB7 ");
+        blocks.push(`
+                    <div class="history-item ${isExported ? "history-item--exported" : ""}">
+                      <div class="history-copy">
+                        <div class="history-command" title="${escapeHtml(item.command || "\u672A\u547D\u540D\u4FEE\u6539")}">${escapeHtml(item.command || "\u672A\u547D\u540D\u4FEE\u6539")}</div>
+                        <div class="history-meta">${escapeHtml(meta)}</div>
+                      </div>
+                      <button class="secondary mini" data-action="rollback" data-edit-id="${escapeHtml(item.id)}">\u56DE\u9000</button>
+                    </div>
+                  `);
+      });
+      return blocks.join("");
+    })()}</div>
             </div>
           </div>
         ` : ""}
-        `}
       </div>
     </section>
   `;
@@ -1322,7 +1366,6 @@
       collapsed: false,
       hovered: null,
       selected: null,
-      layerCandidates: null,
       status: "\u70B9\u51FB\u9875\u9762\u5143\u7D20\u5F00\u59CB\u7F16\u8F91\u3002",
       activeTab: "nlp",
       expandedGroups: /* @__PURE__ */ new Set(["color"])
@@ -1376,10 +1419,9 @@
       applyPropertyChange(property, value ? `${value}px` : "0px");
     }
     function onMouseMove(event) {
-      if (!state.enabled) return;
+      if (!state.enabled || state.collapsed) return;
       state.hovered = isEditableTarget(event.target) ? event.target : null;
       updateOutline(hoverOutline, state.hovered && state.hovered !== state.selected ? state.hovered : null);
-      if (state.layerCandidates) return;
       updateOutline(selectedOutline, state.selected);
     }
     function commitTextEdit() {
@@ -1417,7 +1459,7 @@
       }
     }
     function onDblClick(event) {
-      if (!state.enabled || !isEditableTarget(event.target)) return;
+      if (!state.enabled || state.collapsed || !isEditableTarget(event.target)) return;
       if (!isTextNode(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1452,18 +1494,13 @@
     }
     function selectElement(el) {
       state.selected = el;
-      state.layerCandidates = null;
       state.status = `\u5DF2\u9009\u4E2D\uFF1A${getElementLabel(el)}`;
       updateOutline(hoverOutline, null);
       updateOutline(selectedOutline, state.selected);
       rerender();
     }
-    function getLayerCandidates(x, y) {
-      const elements = document.elementsFromPoint(x, y);
-      return elements.filter((el) => isEditableTarget(el));
-    }
     function onClick(event) {
-      if (!state.enabled || !isEditableTarget(event.target)) return;
+      if (!state.enabled || state.collapsed || !isEditableTarget(event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       if (editingElement && editingElement !== event.target) {
@@ -1471,15 +1508,6 @@
       }
       if (state.selected === event.target && isTextNode(event.target) && !editingElement) {
         startTextEdit(event.target);
-        return;
-      }
-      const candidates = getLayerCandidates(event.clientX, event.clientY);
-      if (candidates.length > 1) {
-        state.layerCandidates = candidates;
-        state.status = `\u68C0\u6D4B\u5230 ${candidates.length} \u4E2A\u91CD\u53E0\u56FE\u5C42\uFF0C\u8BF7\u5728\u9762\u677F\u4E2D\u9009\u62E9`;
-        updateOutline(hoverOutline, null);
-        updateOutline(selectedOutline, null);
-        rerender();
         return;
       }
       selectElement(event.target);
@@ -1521,66 +1549,205 @@
       const record = createEditRecord({ element: target, command, parsed });
       applyEdit(record);
       saveEdit(record);
-      saveHtmlToFile();
       state.selected = target;
       updateOutline(selectedOutline, state.selected);
-      setStatus(`\u5DF2\u5E94\u7528\uFF1A${command}`);
+      const saveResult = await saveHtmlToFile();
+      if (saveResult === "saved") setStatus(`\u5DF2\u5E94\u7528\uFF1A${command} \xB7 \u5DF2\u5199\u5165\u6587\u4EF6`);
+      else setStatus(`\u5DF2\u5E94\u7528\uFF1A${command}`);
       return record;
     }
-    function exportHtml() {
-      const clone = document.documentElement.cloneNode(true);
-      const editorRoot = clone.querySelector(`#${ROOT_ID}`);
-      if (editorRoot) editorRoot.remove();
-      const hoverEl = clone.querySelector(`#${HOVER_OUTLINE_ID}`);
-      if (hoverEl) hoverEl.remove();
-      const selectedEl = clone.querySelector(`#${SELECTED_OUTLINE_ID}`);
-      if (selectedEl) selectedEl.remove();
-      clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-      const html = "<!DOCTYPE html>\n" + clone.outerHTML;
-      const blob = new Blob([html], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
+    function getEditRect(record) {
+      try {
+        const el = document.querySelector(record.selector);
+        if (!el) return void 0;
+        const r = el.getBoundingClientRect();
+        return {
+          x: Math.round(r.left + window.scrollX),
+          y: Math.round(r.top + window.scrollY),
+          w: Math.round(r.width),
+          h: Math.round(r.height)
+        };
+      } catch {
+        return void 0;
+      }
+    }
+    function describeEditChange(record) {
+      const parts = [];
+      const styleEntries = Object.entries(record.style || {}).filter(([, v]) => v !== void 0);
+      for (const [key, after] of styleEntries) {
+        const cssKey = toCssPropertyName3(key);
+        const before = record.before?.style?.[key];
+        parts.push({ kind: "style", property: cssKey, before: before || "(\u672A\u8BBE\u7F6E)", after });
+      }
+      if (record.text !== void 0) {
+        parts.push({ kind: "text", before: record.before?.text ?? "", after: record.text });
+      }
+      if (record.hidden !== void 0) {
+        parts.push({ kind: "visibility", before: record.hidden ? "\u663E\u793A" : "\u9690\u85CF", after: record.hidden ? "\u9690\u85CF" : "\u663E\u793A" });
+      }
+      if (record.order) {
+        parts.push({ kind: "order", after: record.order });
+      }
+      if (record.insert) {
+        parts.push({ kind: "insert", after: record.insert });
+      }
+      return parts;
+    }
+    function buildEditList() {
+      const records = readStoredEditsForPath();
+      return records.map((record, index) => ({
+        index: index + 1,
+        selector: record.selector,
+        label: record.label,
+        command: record.command,
+        changes: describeEditChange(record),
+        rect: getEditRect(record),
+        source: record.source,
+        createdAt: record.createdAt,
+        exportedAt: record.exportedAt
+      }));
+    }
+    function renderEditItem(lines, item) {
+      lines.push(`### ${item.index}. ${item.label || item.selector}`);
+      lines.push("");
+      if (item.command) lines.push(`> **\u6307\u4EE4**: ${item.command}`);
+      lines.push("");
+      lines.push(`- selector: \`${item.selector}\``);
+      if (item.source) lines.push(`- \u6E90\u7801\u63D0\u793A: \`${item.source}\``);
+      if (item.rect) lines.push(`- \u5143\u7D20\u4F4D\u7F6E\uFF08\u9875\u9762\u5750\u6807\uFF09: x=${item.rect.x}, y=${item.rect.y}, w=${item.rect.w}, h=${item.rect.h}`);
+      lines.push("");
+      lines.push("**\u6539\u52A8**:");
+      item.changes.forEach((change) => {
+        const line = formatChangeLine(change);
+        if (line) lines.push(line);
+      });
+      lines.push("");
+    }
+    function formatChangeLine(change) {
+      if (change.kind === "style") {
+        return `- ${change.property}: \`${change.before}\` \u2192 \`${change.after}\``;
+      }
+      if (change.kind === "text") {
+        return `- \u6587\u6848: "${change.before}" \u2192 "${change.after}"`;
+      }
+      if (change.kind === "visibility") {
+        return `- \u663E\u9690: ${change.before} \u2192 ${change.after}`;
+      }
+      if (change.kind === "order") {
+        const map = { up: "\u4E0A\u79FB\u4E00\u4F4D", down: "\u4E0B\u79FB\u4E00\u4F4D", first: "\u79FB\u5230\u9996\u4F4D", last: "\u79FB\u5230\u672B\u4F4D" };
+        return `- \u6392\u5E8F: ${map[change.after] || change.after}`;
+      }
+      if (change.kind === "insert") {
+        return `- \u65B0\u589E\u540C\u7EA7\u5143\u7D20\uFF0C\u6587\u672C: "${change.after}"`;
+      }
+      return "";
+    }
+    async function exportEditList() {
+      const list = buildEditList();
+      if (!list.length) {
+        setStatus("\u5F53\u524D\u9875\u9762\u6CA1\u6709\u53EF\u5BFC\u51FA\u7684\u4FEE\u6539\u3002");
+        return;
+      }
+      const previouslyExported = list.filter((item) => item.exportedAt);
+      const newlyAdded = list.filter((item) => !item.exportedAt);
+      const url = window.location.href;
+      const title = document.title || "";
+      const exportedAt = (/* @__PURE__ */ new Date()).toISOString();
+      const lines = [];
+      lines.push(`# Click-Edit \u4FEE\u6539\u6E05\u5355`);
+      lines.push("");
+      lines.push(`- \u9875\u9762: ${title}`);
+      lines.push(`- URL: ${url}`);
+      lines.push(`- \u5BFC\u51FA\u65F6\u95F4: ${exportedAt}`);
+      lines.push(`- \u4FEE\u6539\u6761\u6570: ${list.length}\uFF08\u672C\u6B21\u65B0\u589E ${newlyAdded.length}\uFF0C\u5386\u53F2\u5DF2\u5BFC\u51FA ${previouslyExported.length}\uFF09`);
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+      if (newlyAdded.length) {
+        lines.push(`## \u{1F195} \u672C\u6B21\u65B0\u589E\uFF08${newlyAdded.length} \u6761\uFF09`);
+        lines.push("");
+        lines.push("> \u4E0A\u6B21\u5BFC\u51FA\u4E4B\u540E\u4EA7\u751F\u7684\u4FEE\u6539\uFF0C\u5F00\u53D1\u4F18\u5148\u770B\u8FD9\u4E00\u6BB5\u3002");
+        lines.push("");
+        newlyAdded.forEach((item) => renderEditItem(lines, item));
+        lines.push("---");
+        lines.push("");
+      }
+      if (previouslyExported.length) {
+        lines.push(`## \u2705 \u5DF2\u5BFC\u51FA\u8FC7\uFF08${previouslyExported.length} \u6761\uFF09`);
+        lines.push("");
+        lines.push("> \u4E4B\u524D\u5DF2\u7ECF\u5BFC\u51FA\u8FC7\u7684\u4FEE\u6539\uFF0C\u7559\u5728\u8FD9\u91CC\u4F9B\u5B8C\u6574\u5BF9\u7167\u3002");
+        lines.push("");
+        previouslyExported.forEach((item) => renderEditItem(lines, item));
+        lines.push("---");
+        lines.push("");
+      }
+      lines.push("## \u539F\u59CB\u6570\u636E\uFF08JSON\uFF0C\u53EF\u76F4\u63A5\u5582\u7ED9\u811A\u672C\uFF09");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify({
+        url,
+        title,
+        exportedAt,
+        summary: { total: list.length, newlyAdded: newlyAdded.length, previouslyExported: previouslyExported.length },
+        edits: list
+      }, null, 2));
+      lines.push("```");
+      lines.push("");
+      const md = lines.join("\n");
+      const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+      const pageName = (document.title || "page").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60);
+      const suggestedName = `click-edit-${pageName}.md`;
+      let summary;
+      if (newlyAdded.length && previouslyExported.length) {
+        summary = `\u672C\u6B21\u65B0\u589E ${newlyAdded.length} \u6761\uFF0C\u542B\u5386\u53F2 ${previouslyExported.length} \u6761`;
+      } else if (newlyAdded.length) {
+        summary = `${newlyAdded.length} \u6761\u4FEE\u6539`;
+      } else {
+        summary = `${previouslyExported.length} \u6761\u5386\u53F2\u4FEE\u6539\uFF0C\u65E0\u65B0\u589E`;
+      }
+      if (typeof window.showSaveFilePicker === "function") {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName,
+            types: [{ description: "Markdown \u6587\u4EF6", accept: { "text/markdown": [".md"] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          markExported(void 0, exportedAt);
+          rerender();
+          setStatus(`\u4FDD\u5B58\u6210\u529F\uFF1A${handle.name}\uFF08${summary}\uFF09`);
+        } catch (err) {
+          if (err.name === "AbortError") {
+            setStatus("\u5DF2\u53D6\u6D88\u4FDD\u5B58\u3002");
+          } else {
+            setStatus(`\u4FDD\u5B58\u5931\u8D25\uFF1A${err.message || err}`);
+          }
+        }
+        return;
+      }
+      const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = url;
-      const pageName = document.title || "page";
-      link.download = `${pageName}.html`;
+      link.href = objectUrl;
+      link.download = suggestedName;
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
-      setStatus("\u5DF2\u5BFC\u51FA\u4FEE\u6539\u540E\u7684 HTML \u6587\u4EF6\u3002");
-    }
-    async function saveHtmlDirect() {
-      if (!window.location.href.startsWith("file://")) {
-        setStatus("\u4FDD\u5B58\u4EC5\u652F\u6301\u672C\u5730 file:// \u9875\u9762\u3002");
-        return;
-      }
-      const clone = document.documentElement.cloneNode(true);
-      const editorRoot = clone.querySelector(`#${ROOT_ID}`);
-      if (editorRoot) editorRoot.remove();
-      clone.querySelectorAll(`#${HOVER_OUTLINE_ID}, #${SELECTED_OUTLINE_ID}`).forEach((el) => el.remove());
-      clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-      const html = "<!DOCTYPE html>\n" + clone.outerHTML;
-      try {
-        const res = await fetch(SAVE_SERVER, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath: window.location.href, html })
-        });
-        if (res.ok) {
-          setStatus("\u5DF2\u4FDD\u5B58\u5230\u6587\u4EF6\u3002");
-        } else {
-          const data = await res.json().catch(() => ({}));
-          setStatus(`\u4FDD\u5B58\u5931\u8D25\uFF1A${data.error || res.statusText}`);
-        }
-      } catch {
-        setStatus("\u4FDD\u5B58\u5931\u8D25\uFF1A\u8BF7\u5148\u8FD0\u884C npm run save-server");
-      }
+      URL.revokeObjectURL(objectUrl);
+      markExported(void 0, exportedAt);
+      rerender();
+      setStatus(`\u5DF2\u4E0B\u8F7D ${suggestedName}\uFF08${summary}\uFF09\uFF0C\u8BF7\u5230\u6D4F\u89C8\u5668\u9ED8\u8BA4\u4E0B\u8F7D\u6587\u4EF6\u5939\u67E5\u6536`);
     }
     function undoEdit() {
       const record = undoLastEdit();
       if (!record) {
         setStatus("\u6CA1\u6709\u53EF\u64A4\u9500\u7684\u4FEE\u6539\u3002");
         return void 0;
+      }
+      if (record.command) {
+        const el = document.querySelector(record.selector);
+        const ctx = el ? { tag: el.tagName.toLowerCase(), text: el.innerText?.slice(0, 50) } : null;
+        trackMisparsed(record.command, ctx, JSON.stringify(record.style || {}));
       }
       setStatus(`\u5DF2\u64A4\u9500\uFF1A${record.command || record.label || "\u4E0A\u4E00\u6761\u4FEE\u6539"}`);
       return record;
@@ -1591,6 +1758,13 @@
         setStatus("\u65E0\u6CD5\u56DE\u9000\u8FD9\u6761\u8BB0\u5F55\uFF0C\u8BF7\u786E\u8BA4\u5143\u7D20\u4ECD\u5728\u5F53\u524D\u9875\u9762\u3002");
         return [];
       }
+      records.forEach((record) => {
+        if (record.command) {
+          const el = document.querySelector(record.selector);
+          const ctx = el ? { tag: el.tagName.toLowerCase(), text: el.innerText?.slice(0, 50) } : null;
+          trackMisparsed(record.command, ctx, JSON.stringify(record.style || {}));
+        }
+      });
       setStatus(`\u5DF2\u56DE\u9000 ${records.length} \u6761\u4FEE\u6539\u3002`);
       return records;
     }
@@ -1603,11 +1777,15 @@
       const action = trigger?.getAttribute?.("data-action");
       if (action === "collapse") {
         state.collapsed = true;
+        state.hovered = null;
+        updateOutline(hoverOutline, null);
+        updateOutline(selectedOutline, null);
         rerender();
         return;
       }
       if (action === "expand") {
         state.collapsed = false;
+        updateOutline(selectedOutline, state.selected);
         rerender();
         return;
       }
@@ -1646,27 +1824,11 @@
         return;
       }
       if (action === "export") {
-        exportHtml();
-        return;
-      }
-      if (action === "save-html") {
-        saveHtmlDirect();
+        exportEditList();
         return;
       }
       if (action === "reset") {
         resetEdits();
-        return;
-      }
-      if (action === "pick-layer") {
-        const idx = parseInt(trigger.getAttribute("data-layer-index"), 10);
-        const el = state.layerCandidates?.[idx];
-        if (el) selectElement(el);
-        return;
-      }
-      if (action === "cancel-layer-pick") {
-        state.layerCandidates = null;
-        state.status = "\u5DF2\u53D6\u6D88\u9009\u62E9\uFF0C\u70B9\u51FB\u9875\u9762\u5143\u7D20\u91CD\u65B0\u9009\u53D6\u3002";
-        rerender();
         return;
       }
       const groupHeader = event.target?.closest?.(".group-header");
@@ -1691,28 +1853,13 @@
         return;
       }
     });
-    shadow.addEventListener("mouseover", (event) => {
-      const layerItem = event.target?.closest?.(".layer-item");
-      if (layerItem && state.layerCandidates) {
-        const idx = parseInt(layerItem.getAttribute("data-layer-index"), 10);
-        const el = state.layerCandidates[idx];
-        if (el) {
-          selectedOutline.style.border = "2px solid #ff7d00";
-          selectedOutline.style.boxShadow = "0 0 0 4px rgba(255,125,0,.18)";
-          updateOutline(selectedOutline, el);
-        }
-      }
-    });
-    shadow.addEventListener("mouseout", (event) => {
-      const layerItem = event.target?.closest?.(".layer-item");
-      if (layerItem && state.layerCandidates) {
-        selectedOutline.style.border = "2px solid #3370ff";
-        selectedOutline.style.boxShadow = "0 0 0 4px rgba(51,112,255,.14)";
-        updateOutline(selectedOutline, state.selected);
-      }
-    });
     shadow.addEventListener("input", (event) => {
       const target = event.target;
+      if (target.matches?.("textarea")) {
+        const applyBtn = shadow.querySelector('[data-action="apply"]');
+        if (applyBtn) applyBtn.disabled = !target.value.trim();
+        return;
+      }
       if (!state.selected) return;
       if (target.type === "color" && target.dataset.property) {
         state.selected.style.setProperty(toCssPropertyName3(target.dataset.property), target.value);
@@ -1796,19 +1943,9 @@
         }
       }
     });
-    function onGlobalKeydown(event) {
-      if (event.key !== "Escape") return;
-      if (state.layerCandidates) {
-        event.preventDefault();
-        state.layerCandidates = null;
-        state.status = "\u5DF2\u53D6\u6D88\u9009\u62E9\uFF0C\u70B9\u51FB\u9875\u9762\u5143\u7D20\u91CD\u65B0\u9009\u53D6\u3002";
-        rerender();
-      }
-    }
     document.addEventListener("mousemove", onMouseMove, true);
     document.addEventListener("click", onClick, true);
     document.addEventListener("dblclick", onDblClick, true);
-    document.addEventListener("keydown", onGlobalKeydown, true);
     readStoredEdits().forEach((record) => applyEdit(record));
     rerender();
     const api = {
@@ -1816,14 +1953,13 @@
         document.removeEventListener("mousemove", onMouseMove, true);
         document.removeEventListener("click", onClick, true);
         document.removeEventListener("dblclick", onDblClick, true);
-        document.removeEventListener("keydown", onGlobalKeydown, true);
         if (editingElement) commitTextEdit();
         root.remove();
         hoverOutline.remove();
         selectedOutline.remove();
         delete window.__CLICK_EDIT__;
       },
-      exportHtml: () => exportHtml(),
+      exportEditList: () => exportEditList(),
       history: () => readStoredEditsForPath(),
       applyToElement: (element, command) => applyCommandToElement(element, command),
       undo: () => undoEdit(),

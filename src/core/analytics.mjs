@@ -13,10 +13,20 @@ function writeRecords(records) {
 }
 
 export function trackUnrecognized(command, elementContext) {
+  track('unrecognized', command, elementContext)
+}
+
+export function trackMisparsed(command, elementContext, appliedResult) {
+  track('misparsed', command, elementContext, appliedResult)
+}
+
+function track(type, command, elementContext, appliedResult) {
   const records = readRecords()
   records.push({
+    type,
     command,
     element: elementContext ? `<${elementContext.tag}> "${elementContext.text?.slice(0, 50)}"` : null,
+    applied: appliedResult || null,
     url: location.href,
     time: new Date().toISOString()
   })
@@ -35,22 +45,46 @@ export function autoReport() {
   const records = readRecords()
   if (!records.length) return
 
+  const unrecognized = records.filter(r => r.type === 'unrecognized')
+  const misparsed = records.filter(r => r.type === 'misparsed')
+
+  const sections = []
+  if (unrecognized.length) {
+    sections.push(
+      `### 未识别 (${unrecognized.length} 条)`,
+      '',
+      '| 指令 | 元素 | 页面 | 时间 |',
+      '|------|------|------|------|',
+      ...unrecognized.map(r =>
+        `| ${r.command} | ${r.element || '-'} | ${r.url?.split('/').pop() || '-'} | ${r.time?.slice(0, 16)} |`
+      )
+    )
+  }
+  if (misparsed.length) {
+    sections.push(
+      '',
+      `### 解析错误 (${misparsed.length} 条)`,
+      '',
+      '| 指令 | 实际效果 | 元素 | 时间 |',
+      '|------|---------|------|------|',
+      ...misparsed.map(r =>
+        `| ${r.command} | ${r.applied || '-'} | ${r.element || '-'} | ${r.time?.slice(0, 16)} |`
+      )
+    )
+  }
+
   const body = [
-    '## 未识别指令上报',
+    '## 指令问题上报',
     '',
-    `共 ${records.length} 条，自动收集。`,
+    `共 ${records.length} 条（未识别 ${unrecognized.length} + 解析错误 ${misparsed.length}），自动收集。`,
     '',
-    '| 指令 | 元素 | 页面 | 时间 |',
-    '|------|------|------|------|',
-    ...records.map(r =>
-      `| ${r.command} | ${r.element || '-'} | ${r.url?.split('/').pop() || '-'} | ${r.time?.slice(0, 16)} |`
-    ),
+    ...sections,
     '',
     '---',
     'Auto-reported by Click-Edit analytics'
   ].join('\n')
 
-  const title = `[Analytics] ${records.length} 条未识别指令 (${new Date().toISOString().slice(0, 10)})`
+  const title = `[Analytics] ${records.length} 条指令问题 (${new Date().toISOString().slice(0, 10)})`
 
   const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
     title,

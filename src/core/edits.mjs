@@ -176,6 +176,21 @@ export function saveEdit(record) {
   return records
 }
 
+// 把当前 path 下所有未导出的 record 标记为已导出，返回更新后全量 records
+export function markExported(path = getCurrentPath(), exportedAt = new Date().toISOString()) {
+  const records = readStoredEdits()
+  let dirty = false
+  for (const record of records) {
+    if (!recordMatchesPath(record, path)) continue
+    if (!record.exportedAt) {
+      record.exportedAt = exportedAt
+      dirty = true
+    }
+  }
+  if (dirty) writeStoredEdits(records)
+  return records
+}
+
 export function undoLastEdit(root = document) {
   const records = readStoredEdits()
   const path = getCurrentPath()
