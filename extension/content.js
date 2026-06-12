@@ -205,8 +205,8 @@
     return element.getAttribute("aria-label") || element.getAttribute("title") || element.tagName.toLowerCase();
   }
   function getElementSelector(element) {
-    const visualId = element.getAttribute("data-vpe-id");
-    if (visualId) return `[data-vpe-id="${cssEscape(visualId)}"]`;
+    const visualId = element.getAttribute("data-ce-id");
+    if (visualId) return `[data-ce-id="${cssEscape(visualId)}"]`;
     const testId = element.getAttribute("data-testid");
     if (testId) return `[data-testid="${cssEscape(testId)}"]`;
     const id = element.getAttribute("id");
@@ -225,8 +225,8 @@
     return `body > ${parts.join(" > ")}`;
   }
   function getSourceHint(element) {
-    const source = element.getAttribute("data-vpe-source");
-    const sourceId = element.getAttribute("data-vpe-id");
+    const source = element.getAttribute("data-ce-source");
+    const sourceId = element.getAttribute("data-ce-id");
     if (!source && !sourceId) return void 0;
     return {
       file: source || void 0,
@@ -236,7 +236,7 @@
   }
 
   // src/core/edits.mjs
-  var STORAGE_KEY = "visual-page-editor-edits-v1";
+  var STORAGE_KEY = "click-edit-edits-v1";
   function toCssPropertyName(key) {
     return key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   }
@@ -288,7 +288,7 @@
       const sibling = element.previousElementSibling || element.nextElementSibling || element;
       const clone = sibling.cloneNode(true);
       clone.removeAttribute("id");
-      clone.setAttribute("data-vpe-inserted", record.id);
+      clone.setAttribute("data-ce-inserted", record.id);
       const textNode = clone.querySelector("span, a, p, h1, h2, h3, h4, h5, h6, li, label, div");
       if (textNode) {
         textNode.textContent = record.insert;
@@ -333,7 +333,7 @@
     const element = root.querySelector(record.selector);
     if (!element || !record.before) return false;
     if (record.insert) {
-      const inserted = root.querySelector(`[data-vpe-inserted="${record.id}"]`);
+      const inserted = root.querySelector(`[data-ce-inserted="${record.id}"]`);
       if (inserted) inserted.remove();
       return true;
     }
@@ -869,7 +869,7 @@
   function getApiKey() {
     if (apiKey) return apiKey;
     try {
-      apiKey = localStorage.getItem("vpe-api-key");
+      apiKey = localStorage.getItem("click-edit-api-key");
     } catch {
     }
     return apiKey || DEFAULT_KEY;
@@ -908,7 +908,7 @@
         if (res.status === 401) {
           apiKey = null;
           try {
-            localStorage.removeItem("vpe-api-key");
+            localStorage.removeItem("click-edit-api-key");
           } catch {
           }
         }
@@ -931,9 +931,9 @@
   }
 
   // src/runtime/overlay.mjs
-  var ROOT_ID = "visual-page-editor-root";
-  var HOVER_OUTLINE_ID = "visual-page-editor-hover-outline";
-  var SELECTED_OUTLINE_ID = "visual-page-editor-selected-outline";
+  var ROOT_ID = "click-edit-root";
+  var HOVER_OUTLINE_ID = "click-edit-hover-outline";
+  var SELECTED_OUTLINE_ID = "click-edit-selected-outline";
   var SAVE_SERVER = "http://localhost:17532/save";
   function saveHtmlToFile() {
     if (!window.location.href.startsWith("file://")) return;
@@ -1108,6 +1108,35 @@
       .history-meta { margin-top: 3px; color: #8f959e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
       .empty-history { color: #8f959e; font-size: 12px; }
 
+      .layer-picker { padding: 8px 16px 0; }
+      .layer-picker-title { font: 600 12px/1 inherit; color: #646a73; margin-bottom: 8px; }
+      .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+      .layer-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #f6f6fb;
+        cursor: pointer;
+        transition: background .1s;
+      }
+      .layer-item:hover { background: #e8e9ee; }
+      .layer-item--depth {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: #3370ff;
+        color: #fff;
+        font: 700 11px/24px inherit;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .layer-item--info { min-width: 0; flex: 1; }
+      .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
+      .layer-item--text { font: 11px/1.4 inherit; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .layer-item--size { font: 11px/1 inherit; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+
       button {
         border: 0;
         border-radius: 999px;
@@ -1127,12 +1156,37 @@
       ` : `
       <div class="header">
         <div>
-          <div class="title">Visual Page Editor</div>
+          <div class="title">Click-Edit</div>
           <div class="status">${state.status}</div>
         </div>
         <button class="collapse-btn" data-action="collapse" title="\u6536\u8D77">&times;</button>
       </div>`}
       <div class="body">
+        ${state.layerCandidates ? `
+          <div class="layer-picker">
+            <div class="layer-picker-title">\u70B9\u51FB\u4F4D\u7F6E\u6709 ${state.layerCandidates.length} \u4E2A\u56FE\u5C42\uFF08\u4ECE\u4E0A\u5230\u4E0B\uFF09</div>
+            <div class="layer-list">
+              ${state.layerCandidates.map((el, i) => {
+      const tag = el.tagName.toLowerCase();
+      const cls = el.className ? "." + el.className.toString().split(/\s+/).filter(Boolean).slice(0, 2).join(".") : "";
+      const id = el.id ? "#" + el.id : "";
+      const text = el.innerText?.trim().replace(/\s+/g, " ").slice(0, 50) || "";
+      const rect = el.getBoundingClientRect();
+      const size = `${Math.round(rect.width)}\xD7${Math.round(rect.height)}`;
+      return `
+                  <div class="layer-item" data-action="pick-layer" data-layer-index="${i}">
+                    <div class="layer-item--depth">${i + 1}</div>
+                    <div class="layer-item--info">
+                      <div class="layer-item--tag">${escapeHtml(tag + id + cls)}</div>
+                      ${text ? `<div class="layer-item--text">${escapeHtml(text)}</div>` : ""}
+                    </div>
+                    <div class="layer-item--size">${size}</div>
+                  </div>
+                `;
+    }).join("")}
+            </div>
+          </div>
+        ` : `
         <div class="tabs">
           <button class="tab ${state.activeTab === "properties" ? "tab--active" : "tab--inactive"}" data-action="tab-properties">\u5C5E\u6027\u9762\u677F</button>
           <button class="tab ${state.activeTab === "nlp" ? "tab--active" : "tab--inactive"}" data-action="tab-nlp">\u5FEB\u6377\u8F93\u5165</button>
@@ -1169,13 +1223,14 @@
             </div>
           </div>
         ` : ""}
+        `}
       </div>
     </section>
   `;
   }
-  function initVisualEditor(options = {}) {
+  function initClickEdit(options = {}) {
     if (typeof window === "undefined") return void 0;
-    if (window.__VISUAL_PAGE_EDITOR__) return window.__VISUAL_PAGE_EDITOR__;
+    if (window.__CLICK_EDIT__) return window.__CLICK_EDIT__;
     const root = document.createElement("div");
     root.id = ROOT_ID;
     const shadow = root.attachShadow({ mode: "open" });
@@ -1197,6 +1252,7 @@
       collapsed: false,
       hovered: null,
       selected: null,
+      layerCandidates: null,
       status: "\u70B9\u51FB\u9875\u9762\u5143\u7D20\u5F00\u59CB\u7F16\u8F91\u3002",
       activeTab: "nlp",
       expandedGroups: /* @__PURE__ */ new Set(["color"])
@@ -1323,6 +1379,18 @@
       state.status = "\u7F16\u8F91\u6587\u5B57\u4E2D\u2026 \u70B9\u51FB\u522B\u5904\u4FDD\u5B58\uFF0CEsc \u53D6\u6D88";
       rerender();
     }
+    function selectElement(el) {
+      state.selected = el;
+      state.layerCandidates = null;
+      state.status = `\u5DF2\u9009\u4E2D\uFF1A${getElementLabel(el)}`;
+      updateOutline(hoverOutline, null);
+      updateOutline(selectedOutline, state.selected);
+      rerender();
+    }
+    function getLayerCandidates(x, y) {
+      const elements = document.elementsFromPoint(x, y);
+      return elements.filter((el) => isEditableTarget(el));
+    }
     function onClick(event) {
       if (!state.enabled || !isEditableTarget(event.target)) return;
       event.preventDefault();
@@ -1334,11 +1402,15 @@
         startTextEdit(event.target);
         return;
       }
-      state.selected = event.target;
-      state.status = `\u5DF2\u9009\u4E2D\uFF1A${getElementLabel(event.target)}`;
-      updateOutline(hoverOutline, null);
-      updateOutline(selectedOutline, state.selected);
-      rerender();
+      const candidates = getLayerCandidates(event.clientX, event.clientY);
+      if (candidates.length > 1) {
+        state.layerCandidates = candidates;
+        state.status = `\u68C0\u6D4B\u5230 ${candidates.length} \u4E2A\u91CD\u53E0\u56FE\u5C42\uFF0C\u8BF7\u5728\u9762\u677F\u4E2D\u9009\u62E9`;
+        updateOutline(selectedOutline, null);
+        rerender();
+        return;
+      }
+      selectElement(event.target);
     }
     function applyCommand() {
       const textarea = shadow.querySelector("textarea");
@@ -1512,6 +1584,12 @@
         resetEdits();
         return;
       }
+      if (action === "pick-layer") {
+        const idx = parseInt(trigger.getAttribute("data-layer-index"), 10);
+        const el = state.layerCandidates?.[idx];
+        if (el) selectElement(el);
+        return;
+      }
       const groupHeader = event.target?.closest?.(".group-header");
       if (groupHeader) {
         const key = groupHeader.dataset.group;
@@ -1533,6 +1611,18 @@
         applyPropertyChange(btnGroup.dataset.property, btnGroup.dataset.value);
         return;
       }
+    });
+    shadow.addEventListener("mouseover", (event) => {
+      const layerItem = event.target?.closest?.(".layer-item");
+      if (layerItem && state.layerCandidates) {
+        const idx = parseInt(layerItem.getAttribute("data-layer-index"), 10);
+        const el = state.layerCandidates[idx];
+        if (el) updateOutline(hoverOutline, el);
+      }
+    });
+    shadow.addEventListener("mouseout", (event) => {
+      const layerItem = event.target?.closest?.(".layer-item");
+      if (layerItem) updateOutline(hoverOutline, null);
     });
     shadow.addEventListener("input", (event) => {
       const target = event.target;
@@ -1633,7 +1723,7 @@
         root.remove();
         hoverOutline.remove();
         selectedOutline.remove();
-        delete window.__VISUAL_PAGE_EDITOR__;
+        delete window.__CLICK_EDIT__;
       },
       exportHtml: () => exportHtml(),
       history: () => readStoredEditsForPath(),
@@ -1641,18 +1731,18 @@
       undo: () => undoEdit(),
       rollback: (editId) => rollbackEdit(editId)
     };
-    window.__VISUAL_PAGE_EDITOR__ = api;
+    window.__CLICK_EDIT__ = api;
     return api;
   }
 
   // extension/content-entry.mjs
-  console.log("[VPE] content script loaded, initializing...");
-  if (!window.__VISUAL_PAGE_EDITOR__) {
+  console.log("[Click-Edit] content script loaded, initializing...");
+  if (!window.__CLICK_EDIT__) {
     try {
-      initVisualEditor({ enabled: true });
-      console.log("[VPE] editor initialized successfully");
+      initClickEdit({ enabled: true });
+      console.log("[Click-Edit] editor initialized successfully");
     } catch (err) {
-      console.error("[VPE] init failed:", err);
+      console.error("[Click-Edit] init failed:", err);
     }
   }
 })();

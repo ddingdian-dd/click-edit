@@ -2,7 +2,7 @@
   {
     "id": "demo-1",
     "path": "/",
-    "selector": "[data-vpe-id=\"hero\"]",
+    "selector": "[data-ce-id=\"hero\"]",
     "label": "Hero",
     "command": "底色改为纯白色，删除阴影",
     "style": {

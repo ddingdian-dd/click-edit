@@ -29,12 +29,12 @@ function readEdits(filePath) {
 
 function printHelp() {
   console.log(`
-Visual Page Editor CLI
+Click-Edit CLI
 
 Usage:
-  vpe patch --edits visual-edits.json --root . --out visual-editor.patch
-  vpe apply --edits visual-edits.json --root . --css src/visual-editor-overrides.css
-  vpe inspect --edits visual-edits.json
+  click-edit patch --edits visual-edits.json --root . --out visual-editor.patch
+  click-edit apply --edits visual-edits.json --root . --css src/visual-editor-overrides.css
+  click-edit inspect --edits visual-edits.json
 
 Options:
   --edits  Exported visual-edits.json file

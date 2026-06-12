@@ -1,6 +1,6 @@
 import { getElementLabel, getElementSelector, getSourceHint } from './selectors.mjs'
 
-export const STORAGE_KEY = 'visual-page-editor-edits-v1'
+export const STORAGE_KEY = 'click-edit-edits-v1'
 
 function toCssPropertyName(key) {
   return key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)
@@ -61,7 +61,7 @@ export function applyEdit(record, root = document) {
     const sibling = element.previousElementSibling || element.nextElementSibling || element
     const clone = sibling.cloneNode(true)
     clone.removeAttribute('id')
-    clone.setAttribute('data-vpe-inserted', record.id)
+    clone.setAttribute('data-ce-inserted', record.id)
     const textNode = clone.querySelector('span, a, p, h1, h2, h3, h4, h5, h6, li, label, div')
     if (textNode) {
       textNode.textContent = record.insert
@@ -114,7 +114,7 @@ export function revertEdit(record, root = document) {
   if (!element || !record.before) return false
 
   if (record.insert) {
-    const inserted = root.querySelector(`[data-vpe-inserted="${record.id}"]`)
+    const inserted = root.querySelector(`[data-ce-inserted="${record.id}"]`)
     if (inserted) inserted.remove()
     return true
   }

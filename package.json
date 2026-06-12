@@ -3,10 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Visual page editor overlay for local web apps with natural-language edits and CLI patch export.",
+  "description": "Click-Edit: visual page editor overlay for local web apps with natural-language edits and CLI patch export.",
   "bin": {
-    "vpe": "./src/cli/index.mjs",
-    "visual-page-editor": "./src/cli/index.mjs"
+    "click-edit": "./src/cli/index.mjs"
   },
   "exports": {
     ".": "./src/runtime/overlay.mjs",

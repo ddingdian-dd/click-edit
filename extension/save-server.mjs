@@ -29,7 +29,7 @@ const server = createServer(async (req, res) => {
 
       const localPath = filePath.startsWith('file://') ? fileURLToPath(filePath) : filePath
       await writeFile(localPath, html, 'utf-8')
-      console.log(`[VPE] saved: ${localPath}`)
+      console.log(`[Click-Edit] saved: ${localPath}`)
       res.writeHead(200)
       res.end(JSON.stringify({ ok: true }))
     } catch (err) {
@@ -44,6 +44,6 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`[VPE Save Server] running on http://localhost:${PORT}`)
+  console.log(`[Click-Edit Save Server] running on http://localhost:${PORT}`)
   console.log('修改会自动保存回原文件。Ctrl+C 退出。')
 })

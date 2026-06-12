@@ -5,7 +5,7 @@ class FakeElement {
   constructor() {
     this._innerText = 'Old title'
     this._innerHTML = '<span>Old title</span>'
-    this.attributes = new Map([['data-vpe-id', 'hero']])
+    this.attributes = new Map([['data-ce-id', 'hero']])
     this.style = {
       values: new Map([['background-color', '#000000']]),
       display: '',
@@ -57,7 +57,7 @@ globalThis.window = {
   },
 }
 globalThis.document = {
-  querySelector: selector => (selector === '[data-vpe-id="hero"]' ? element : null),
+  querySelector: selector => (selector === '[data-ce-id="hero"]' ? element : null),
 }
 
 const record = createEditRecord({
@@ -112,7 +112,7 @@ saveEdit(second)
 saveEdit({
   id: 'other-page-edit',
   path: '/other',
-  selector: '[data-vpe-id="hero"]',
+  selector: '[data-ce-id="hero"]',
   command: '其他页面修改',
   style: { backgroundColor: '#3370ff' },
   before: { style: { backgroundColor: '#000000' } },

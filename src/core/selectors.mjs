@@ -10,8 +10,8 @@ export function getElementLabel(element) {
 }
 
 export function getElementSelector(element) {
-  const visualId = element.getAttribute('data-vpe-id')
-  if (visualId) return `[data-vpe-id="${cssEscape(visualId)}"]`
+  const visualId = element.getAttribute('data-ce-id')
+  if (visualId) return `[data-ce-id="${cssEscape(visualId)}"]`
 
   const testId = element.getAttribute('data-testid')
   if (testId) return `[data-testid="${cssEscape(testId)}"]`
@@ -37,8 +37,8 @@ export function getElementSelector(element) {
 }
 
 export function getSourceHint(element) {
-  const source = element.getAttribute('data-vpe-source')
-  const sourceId = element.getAttribute('data-vpe-id')
+  const source = element.getAttribute('data-ce-source')
+  const sourceId = element.getAttribute('data-ce-id')
   if (!source && !sourceId) return undefined
 
   return {

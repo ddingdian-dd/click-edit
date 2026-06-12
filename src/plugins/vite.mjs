@@ -7,12 +7,12 @@ const srcRoot = path.resolve(__dirname, '..')
 
 function serveSourceFile(req, res, next) {
   const url = req.url?.split('?')[0] || ''
-  if (!url.startsWith('/__visual-page-editor/')) {
+  if (!url.startsWith('/__click-edit/')) {
     next()
     return
   }
 
-  const relativePath = url.replace('/__visual-page-editor/', '')
+  const relativePath = url.replace('/__click-edit/', '')
   const filePath = path.resolve(srcRoot, relativePath)
 
   if (!filePath.startsWith(srcRoot) || !filePath.endsWith('.mjs') || !fs.existsSync(filePath)) {
@@ -25,9 +25,9 @@ function serveSourceFile(req, res, next) {
   res.end(fs.readFileSync(filePath, 'utf8'))
 }
 
-export function visualPageEditorVitePlugin(options = {}) {
+export function clickEditVitePlugin(options = {}) {
   return {
-    name: 'visual-page-editor',
+    name: 'click-edit',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use(serveSourceFile)
@@ -39,7 +39,7 @@ export function visualPageEditorVitePlugin(options = {}) {
         tags: [
           {
             tag: 'script',
-            children: 'import { initVisualEditor } from "/__visual-page-editor/runtime/overlay.mjs"; initVisualEditor();',
+            children: 'import { initClickEdit } from "/__click-edit/runtime/overlay.mjs"; initClickEdit();',
             attrs: { type: 'module' },
             injectTo: 'body',
           },
@@ -49,4 +49,4 @@ export function visualPageEditorVitePlugin(options = {}) {
   }
 }
 
-export default visualPageEditorVitePlugin
+export default clickEditVitePlugin

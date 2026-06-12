@@ -7,12 +7,12 @@ async function getTab() {
 }
 
 async function getState(tabId) {
-  const result = await chrome.storage.session.get(`vpe_${tabId}`)
-  return result[`vpe_${tabId}`] || false
+  const result = await chrome.storage.session.get(`ce_${tabId}`)
+  return result[`ce_${tabId}`] || false
 }
 
 async function setState(tabId, enabled) {
-  await chrome.storage.session.set({ [`vpe_${tabId}`]: enabled })
+  await chrome.storage.session.set({ [`ce_${tabId}`]: enabled })
 }
 
 async function updateUI() {
@@ -25,20 +25,19 @@ async function updateUI() {
 }
 
 async function injectEditor(tabId) {
-  const res = await fetch(chrome.runtime.getURL('content.js'))
-  const code = await res.text()
   await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
-    func: (script) => {
-      if (window.__VISUAL_PAGE_EDITOR__) return
-      const el = document.createElement('script')
-      el.textContent = script
-      document.documentElement.appendChild(el)
-      el.remove()
-    },
-    args: [code]
+    files: ['content.js']
   })
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => !!window.__CLICK_EDIT__
+  })
+  if (!result) {
+    throw new Error('编辑器注入失败，请检查页面是否有 CSP 限制')
+  }
 }
 
 btn.addEventListener('click', async () => {
@@ -54,8 +53,8 @@ btn.addEventListener('click', async () => {
         target: { tabId: tab.id },
         world: 'MAIN',
         func: () => {
-          if (window.__VISUAL_PAGE_EDITOR__) {
-            window.__VISUAL_PAGE_EDITOR__.destroy()
+          if (window.__CLICK_EDIT__) {
+            window.__CLICK_EDIT__.destroy()
           }
         }
       })

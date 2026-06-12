@@ -1,25 +1,26 @@
 # Click-Edit
 
-独立的页面可视化编辑工具。目标是让本地 Next/Vite 项目在开发模式下注入一个页面 overlay：用鼠标选中元素，用自然语言修改样式或文案，导出 `visual-edits.json`，再用 CLI 生成 patch。
+点击选中，自然语言修改，不写代码也能编辑网页的 Chrome 扩展。
 
-当前优先级：
+适用场景：
 
-1. Next/Vite 本地开发插件
-2. CLI patch
-3. 后续再扩展浏览器插件、线上网页、低代码配置后台
+- **设计走查**：直接在页面上改颜色、间距、字号，改完一键导出修改清单，开发直接对照落地
+- **产品评审**：当场改给对方看，不用拉前端排期
+- **UI 微调**：快速验证视觉方案，无需改代码重新部署
+- **本地 HTML 编辑**：本地静态文件的可视化修改，保存即生效
 
 ## 能力边界
 
 当前版本做两类 patch：
 
 - CSS override patch：根据页面导出的 selector + style 生成 CSS 文件 patch，适合快速落地视觉修改。
-- Source text patch：如果元素带 `data-vpe-source="src/app/page.tsx"`，并且修改的是文案，CLI 会尝试在源码里替换原始文案。
+- Source text patch：如果元素带 `data-ce-source="src/app/page.tsx"`，并且修改的是文案，CLI 会尝试在源码里替换原始文案。
 
 当前版本不承诺自动把任意 CSS 精确改回 Tailwind class 或组件 props。那是下一阶段的框架适配能力。
 
 ## 修改记录与回退
 
-运行时会把每次自然语言修改保存到 `localStorage` 的 `visual-page-editor-edits-v1`：
+运行时会把每次自然语言修改保存到 `localStorage` 的 `click-edit-edits-v1`：
 
 - 记录内容包括页面路径、selector、元素标签、自然语言命令、修改后的 style/text，以及修改前的快照。
 - 面板会展示当前页面最近 5 条修改记录。
@@ -32,28 +33,28 @@
 ```js
 // vite.config.mjs
 import { defineConfig } from 'vite'
-import visualPageEditor from './src/plugins/vite.mjs'
+import clickEdit from './src/plugins/vite.mjs'
 
 export default defineConfig({
-  plugins: [visualPageEditor()],
+  plugins: [clickEdit()],
 })
 ```
 
 如果作为 npm 包发布后：
 
 ```js
-import visualPageEditor from 'visual-page-editor/plugins/vite'
+import clickEdit from 'click-edit/plugins/vite'
 ```
 
 ## Next 接入
 
 ```js
 // next.config.mjs
-import withVisualPageEditor from './src/plugins/next.mjs'
+import withClickEdit from './src/plugins/next.mjs'
 
 const nextConfig = {}
 
-export default withVisualPageEditor(nextConfig)
+export default withClickEdit(nextConfig)
 ```
 
 如果目标项目使用 `next.config.ts`，先用 CommonJS 入口：
@@ -61,11 +62,11 @@ export default withVisualPageEditor(nextConfig)
 ```ts
 import type { NextConfig } from "next";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const withVisualPageEditor = require("../可视化编辑/src/plugins/next.cjs");
+const withClickEdit = require("../可视化编辑/src/plugins/next.cjs");
 
 const nextConfig: NextConfig = {};
 
-export default withVisualPageEditor(nextConfig);
+export default withClickEdit(nextConfig);
 ```
 
 Next 16 默认使用 Turbopack。当前 Next 插件第一版使用 webpack client entry 注入，因此本地验证时需要：
@@ -77,7 +78,7 @@ next dev --webpack
 如果作为 npm 包发布后：
 
 ```js
-import withVisualPageEditor from 'visual-page-editor/plugins/next'
+import withClickEdit from 'click-edit/plugins/next'
 ```
 
 ## 提高源码 patch 成功率
@@ -85,12 +86,12 @@ import withVisualPageEditor from 'visual-page-editor/plugins/next'
 给可编辑元素加稳定标记：
 
 ```jsx
-<h1 data-vpe-id="hero-title" data-vpe-source="src/app/page.tsx">
+<h1 data-ce-id="hero-title" data-ce-source="src/app/page.tsx">
   开始训练
 </h1>
 ```
 
-运行时会优先使用 `data-vpe-id` 生成 selector，并把 `data-vpe-source` 写进 edit record。这样 CLI 可以更可靠地替换源码文案。
+运行时会优先使用 `data-ce-id` 生成 selector，并把 `data-ce-source` 写进 edit record。这样 CLI 可以更可靠地替换源码文案。
 
 ## CLI
 

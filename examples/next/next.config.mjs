@@ -1,5 +1,5 @@
-import withVisualPageEditor from '../../src/plugins/next.mjs'
+import withClickEdit from '../../src/plugins/next.mjs'
 
 const nextConfig = {}
 
-export default withVisualPageEditor(nextConfig)
+export default withClickEdit(nextConfig)

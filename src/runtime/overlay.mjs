@@ -4,9 +4,9 @@ import { getElementLabel } from '../core/selectors.mjs'
 import { renderPropertiesPanel, getPropertiesPanelStyles } from './properties-panel.mjs'
 import { llmParseCommand, getApiKey, setApiKey } from '../core/llm-command.mjs'
 
-const ROOT_ID = 'visual-page-editor-root'
-const HOVER_OUTLINE_ID = 'visual-page-editor-hover-outline'
-const SELECTED_OUTLINE_ID = 'visual-page-editor-selected-outline'
+const ROOT_ID = 'click-edit-root'
+const HOVER_OUTLINE_ID = 'click-edit-hover-outline'
+const SELECTED_OUTLINE_ID = 'click-edit-selected-outline'
 const SAVE_SERVER = 'http://localhost:17532/save'
 
 function saveHtmlToFile() {
@@ -215,6 +215,35 @@ function renderPanel(shadow, state) {
       .history-meta { margin-top: 3px; color: #8f959e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
       .empty-history { color: #8f959e; font-size: 12px; }
 
+      .layer-picker { padding: 8px 16px 0; }
+      .layer-picker-title { font: 600 12px/1 inherit; color: #646a73; margin-bottom: 8px; }
+      .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+      .layer-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #f6f6fb;
+        cursor: pointer;
+        transition: background .1s;
+      }
+      .layer-item:hover { background: #e8e9ee; }
+      .layer-item--depth {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: #3370ff;
+        color: #fff;
+        font: 700 11px/24px inherit;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .layer-item--info { min-width: 0; flex: 1; }
+      .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
+      .layer-item--text { font: 11px/1.4 inherit; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .layer-item--size { font: 11px/1 inherit; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+
       button {
         border: 0;
         border-radius: 999px;
@@ -234,12 +263,37 @@ function renderPanel(shadow, state) {
       ` : `
       <div class="header">
         <div>
-          <div class="title">Visual Page Editor</div>
+          <div class="title">Click-Edit</div>
           <div class="status">${state.status}</div>
         </div>
         <button class="collapse-btn" data-action="collapse" title="收起">&times;</button>
       </div>`}
       <div class="body">
+        ${state.layerCandidates ? `
+          <div class="layer-picker">
+            <div class="layer-picker-title">点击位置有 ${state.layerCandidates.length} 个图层（从上到下）</div>
+            <div class="layer-list">
+              ${state.layerCandidates.map((el, i) => {
+                const tag = el.tagName.toLowerCase()
+                const cls = el.className ? '.' + el.className.toString().split(/\s+/).filter(Boolean).slice(0, 2).join('.') : ''
+                const id = el.id ? '#' + el.id : ''
+                const text = el.innerText?.trim().replace(/\s+/g, ' ').slice(0, 50) || ''
+                const rect = el.getBoundingClientRect()
+                const size = `${Math.round(rect.width)}×${Math.round(rect.height)}`
+                return `
+                  <div class="layer-item" data-action="pick-layer" data-layer-index="${i}">
+                    <div class="layer-item--depth">${i + 1}</div>
+                    <div class="layer-item--info">
+                      <div class="layer-item--tag">${escapeHtml(tag + id + cls)}</div>
+                      ${text ? `<div class="layer-item--text">${escapeHtml(text)}</div>` : ''}
+                    </div>
+                    <div class="layer-item--size">${size}</div>
+                  </div>
+                `
+              }).join('')}
+            </div>
+          </div>
+        ` : `
         <div class="tabs">
           <button class="tab ${state.activeTab === 'properties' ? 'tab--active' : 'tab--inactive'}" data-action="tab-properties">属性面板</button>
           <button class="tab ${state.activeTab === 'nlp' ? 'tab--active' : 'tab--inactive'}" data-action="tab-nlp">快捷输入</button>
@@ -276,14 +330,15 @@ function renderPanel(shadow, state) {
             </div>
           </div>
         ` : ''}
+        `}
       </div>
     </section>
   `
 }
 
-export function initVisualEditor(options = {}) {
+export function initClickEdit(options = {}) {
   if (typeof window === 'undefined') return undefined
-  if (window.__VISUAL_PAGE_EDITOR__) return window.__VISUAL_PAGE_EDITOR__
+  if (window.__CLICK_EDIT__) return window.__CLICK_EDIT__
 
   const root = document.createElement('div')
   root.id = ROOT_ID
@@ -307,6 +362,7 @@ export function initVisualEditor(options = {}) {
     collapsed: false,
     hovered: null,
     selected: null,
+    layerCandidates: null,
     status: '点击页面元素开始编辑。',
     activeTab: 'nlp',
     expandedGroups: new Set(['color']),
@@ -454,6 +510,20 @@ export function initVisualEditor(options = {}) {
     rerender()
   }
 
+  function selectElement(el) {
+    state.selected = el
+    state.layerCandidates = null
+    state.status = `已选中：${getElementLabel(el)}`
+    updateOutline(hoverOutline, null)
+    updateOutline(selectedOutline, state.selected)
+    rerender()
+  }
+
+  function getLayerCandidates(x, y) {
+    const elements = document.elementsFromPoint(x, y)
+    return elements.filter(el => isEditableTarget(el))
+  }
+
   function onClick(event) {
     if (!state.enabled || !isEditableTarget(event.target)) return
     event.preventDefault()
@@ -468,11 +538,17 @@ export function initVisualEditor(options = {}) {
       return
     }
 
-    state.selected = event.target
-    state.status = `已选中：${getElementLabel(event.target)}`
-    updateOutline(hoverOutline, null)
-    updateOutline(selectedOutline, state.selected)
-    rerender()
+    const candidates = getLayerCandidates(event.clientX, event.clientY)
+
+    if (candidates.length > 1) {
+      state.layerCandidates = candidates
+      state.status = `检测到 ${candidates.length} 个重叠图层，请在面板中选择`
+      updateOutline(selectedOutline, null)
+      rerender()
+      return
+    }
+
+    selectElement(event.target)
   }
 
   function applyCommand() {
@@ -627,6 +703,12 @@ export function initVisualEditor(options = {}) {
     if (action === 'export') { exportHtml(); return }
     if (action === 'save-html') { saveHtmlDirect(); return }
     if (action === 'reset') { resetEdits(); return }
+    if (action === 'pick-layer') {
+      const idx = parseInt(trigger.getAttribute('data-layer-index'), 10)
+      const el = state.layerCandidates?.[idx]
+      if (el) selectElement(el)
+      return
+    }
 
     // group fold/unfold
     const groupHeader = event.target?.closest?.('.group-header')
@@ -654,6 +736,20 @@ export function initVisualEditor(options = {}) {
       applyPropertyChange(btnGroup.dataset.property, btnGroup.dataset.value)
       return
     }
+  })
+
+  shadow.addEventListener('mouseover', event => {
+    const layerItem = event.target?.closest?.('.layer-item')
+    if (layerItem && state.layerCandidates) {
+      const idx = parseInt(layerItem.getAttribute('data-layer-index'), 10)
+      const el = state.layerCandidates[idx]
+      if (el) updateOutline(hoverOutline, el)
+    }
+  })
+
+  shadow.addEventListener('mouseout', event => {
+    const layerItem = event.target?.closest?.('.layer-item')
+    if (layerItem) updateOutline(hoverOutline, null)
   })
 
   // 实时预览：input 事件直接操作 DOM style，不产生记录
@@ -772,7 +868,7 @@ export function initVisualEditor(options = {}) {
       root.remove()
       hoverOutline.remove()
       selectedOutline.remove()
-      delete window.__VISUAL_PAGE_EDITOR__
+      delete window.__CLICK_EDIT__
     },
     exportHtml: () => exportHtml(),
     history: () => readStoredEditsForPath(),
@@ -781,6 +877,6 @@ export function initVisualEditor(options = {}) {
     rollback: editId => rollbackEdit(editId),
   }
 
-  window.__VISUAL_PAGE_EDITOR__ = api
+  window.__CLICK_EDIT__ = api
   return api
 }

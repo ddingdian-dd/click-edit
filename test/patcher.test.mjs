@@ -5,7 +5,7 @@ const edits = normalizeEdits({
   edits: [
     {
       path: '/',
-      selector: '[data-vpe-id="hero"]',
+      selector: '[data-ce-id="hero"]',
       label: 'Hero',
       command: '底色改为纯白色',
       style: { backgroundColor: '#ffffff', boxShadow: 'none' },
@@ -14,7 +14,7 @@ const edits = normalizeEdits({
 })
 
 const css = buildCssOverrides(edits)
-assert.match(css, /\[data-vpe-id="hero"\]/)
+assert.match(css, /\[data-ce-id="hero"\]/)
 assert.match(css, /background-color: #ffffff;/)
 assert.match(css, /box-shadow: none;/)
 

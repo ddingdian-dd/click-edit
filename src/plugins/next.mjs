@@ -14,7 +14,7 @@ function injectClientEntry(entry) {
   return entry
 }
 
-export function withVisualPageEditor(nextConfig = {}, options = {}) {
+export function withClickEdit(nextConfig = {}, options = {}) {
   const userWebpack = nextConfig.webpack
 
   return {
@@ -26,7 +26,7 @@ export function withVisualPageEditor(nextConfig = {}, options = {}) {
         config.entry = async () => {
           const entries = await originalEntry()
           if (options.debug) {
-            console.log('[visual-page-editor] client entries:', Object.keys(entries))
+            console.log('[click-edit] client entries:', Object.keys(entries))
           }
           for (const name of Object.keys(entries)) {
             entries[name] = injectClientEntry(entries[name])
@@ -40,4 +40,4 @@ export function withVisualPageEditor(nextConfig = {}, options = {}) {
   }
 }
 
-export default withVisualPageEditor
+export default withClickEdit

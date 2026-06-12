@@ -23,12 +23,12 @@ let apiKey = null
 
 export function setApiKey(key) {
   apiKey = key
-  try { localStorage.setItem('vpe-api-key', key) } catch {}
+  try { localStorage.setItem('click-edit-api-key', key) } catch {}
 }
 
 export function getApiKey() {
   if (apiKey) return apiKey
-  try { apiKey = localStorage.getItem('vpe-api-key') } catch {}
+  try { apiKey = localStorage.getItem('click-edit-api-key') } catch {}
   return apiKey || DEFAULT_KEY
 }
 
@@ -71,7 +71,7 @@ export async function llmParseCommand(command, elementContext) {
     if (!res.ok) {
       if (res.status === 401) {
         apiKey = null
-        try { localStorage.removeItem('vpe-api-key') } catch {}
+        try { localStorage.removeItem('click-edit-api-key') } catch {}
       }
       return null
     }
