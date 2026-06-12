@@ -930,6 +930,60 @@
     }
   }
 
+  // src/core/analytics.mjs
+  var STORAGE_KEY2 = "click-edit-analytics-v1";
+  var REPO = "ddingdian-dd/click-edit";
+  var BATCH_THRESHOLD = 5;
+  function readRecords() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY2) || "[]");
+    } catch {
+      return [];
+    }
+  }
+  function writeRecords(records) {
+    localStorage.setItem(STORAGE_KEY2, JSON.stringify(records));
+  }
+  function trackUnrecognized(command, elementContext) {
+    const records = readRecords();
+    records.push({
+      command,
+      element: elementContext ? `<${elementContext.tag}> "${elementContext.text?.slice(0, 50)}"` : null,
+      url: location.href,
+      time: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    writeRecords(records);
+    if (records.length >= BATCH_THRESHOLD) {
+      autoReport();
+    }
+  }
+  function autoReport() {
+    const records = readRecords();
+    if (!records.length) return;
+    const body = [
+      "## \u672A\u8BC6\u522B\u6307\u4EE4\u4E0A\u62A5",
+      "",
+      `\u5171 ${records.length} \u6761\uFF0C\u81EA\u52A8\u6536\u96C6\u3002`,
+      "",
+      "| \u6307\u4EE4 | \u5143\u7D20 | \u9875\u9762 | \u65F6\u95F4 |",
+      "|------|------|------|------|",
+      ...records.map(
+        (r) => `| ${r.command} | ${r.element || "-"} | ${r.url?.split("/").pop() || "-"} | ${r.time?.slice(0, 16)} |`
+      ),
+      "",
+      "---",
+      "Auto-reported by Click-Edit analytics"
+    ].join("\n");
+    const title = `[Analytics] ${records.length} \u6761\u672A\u8BC6\u522B\u6307\u4EE4 (${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)})`;
+    const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
+      title,
+      body,
+      labels: "analytics,unrecognized-command"
+    }).toString();
+    window.open(url, "_blank");
+    writeRecords([]);
+  }
+
   // src/runtime/overlay.mjs
   var ROOT_ID = "click-edit-root";
   var HOVER_OUTLINE_ID = "click-edit-hover-outline";
@@ -1109,7 +1163,20 @@
       .empty-history { color: #8f959e; font-size: 12px; }
 
       .layer-picker { padding: 8px 16px 0; }
-      .layer-picker-title { font: 600 12px/1 inherit; color: #646a73; margin-bottom: 8px; }
+      .layer-picker-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .layer-picker-title { font: 600 12px/1.3 inherit; color: #646a73; flex: 1; }
+      .layer-picker-back {
+        display: inline-flex; align-items: center; gap: 2px;
+        height: 24px; padding: 0 10px;
+        border: 1px solid #d8dadf;
+        border-radius: 999px;
+        background: #fff;
+        color: #1f2329;
+        font: 500 12px/1 inherit;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .layer-picker-back:hover { background: #f6f6fb; border-color: #c1c4ca; }
       .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
       .layer-item {
         display: flex;
@@ -1121,7 +1188,7 @@
         cursor: pointer;
         transition: background .1s;
       }
-      .layer-item:hover { background: #e8e9ee; }
+      .layer-item:hover { background: #e8efff; box-shadow: inset 0 0 0 1px #3370ff; }
       .layer-item--depth {
         width: 24px;
         height: 24px;
@@ -1134,8 +1201,8 @@
       }
       .layer-item--info { min-width: 0; flex: 1; }
       .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
-      .layer-item--text { font: 11px/1.4 inherit; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .layer-item--size { font: 11px/1 inherit; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+      .layer-item--text { font-size: 12px; line-height: 1.4; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .layer-item--size { font-size: 12px; line-height: 1; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
 
       button {
         border: 0;
@@ -1164,7 +1231,10 @@
       <div class="body">
         ${state.layerCandidates ? `
           <div class="layer-picker">
-            <div class="layer-picker-title">\u70B9\u51FB\u4F4D\u7F6E\u6709 ${state.layerCandidates.length} \u4E2A\u56FE\u5C42\uFF08\u4ECE\u4E0A\u5230\u4E0B\uFF09</div>
+            <div class="layer-picker-header">
+              <button class="layer-picker-back" data-action="cancel-layer-pick" title="\u8FD4\u56DE\uFF08Esc\uFF09">\u8FD4\u56DE</button>
+              <div class="layer-picker-title">\u70B9\u51FB\u4F4D\u7F6E\u6709 ${state.layerCandidates.length} \u4E2A\u56FE\u5C42\uFF08\u4ECE\u4E0A\u5230\u4E0B\uFF09</div>
+            </div>
             <div class="layer-list">
               ${state.layerCandidates.map((el, i) => {
       const tag = el.tagName.toLowerCase();
@@ -1309,6 +1379,7 @@
       if (!state.enabled) return;
       state.hovered = isEditableTarget(event.target) ? event.target : null;
       updateOutline(hoverOutline, state.hovered && state.hovered !== state.selected ? state.hovered : null);
+      if (state.layerCandidates) return;
       updateOutline(selectedOutline, state.selected);
     }
     function commitTextEdit() {
@@ -1406,6 +1477,7 @@
       if (candidates.length > 1) {
         state.layerCandidates = candidates;
         state.status = `\u68C0\u6D4B\u5230 ${candidates.length} \u4E2A\u91CD\u53E0\u56FE\u5C42\uFF0C\u8BF7\u5728\u9762\u677F\u4E2D\u9009\u62E9`;
+        updateOutline(hoverOutline, null);
         updateOutline(selectedOutline, null);
         rerender();
         return;
@@ -1440,6 +1512,7 @@
         rerender();
         const llmResult = await llmParseCommand(command, getElementContext(target));
         if (!llmResult || isParsedCommandEmpty(llmResult)) {
+          trackUnrecognized(command, getElementContext(target));
           setStatus("\u672A\u80FD\u7406\u89E3\u6307\u4EE4\uFF0C\u8BF7\u6362\u79CD\u65B9\u5F0F\u63CF\u8FF0\u3002");
           return void 0;
         }
@@ -1590,6 +1663,12 @@
         if (el) selectElement(el);
         return;
       }
+      if (action === "cancel-layer-pick") {
+        state.layerCandidates = null;
+        state.status = "\u5DF2\u53D6\u6D88\u9009\u62E9\uFF0C\u70B9\u51FB\u9875\u9762\u5143\u7D20\u91CD\u65B0\u9009\u53D6\u3002";
+        rerender();
+        return;
+      }
       const groupHeader = event.target?.closest?.(".group-header");
       if (groupHeader) {
         const key = groupHeader.dataset.group;
@@ -1617,12 +1696,20 @@
       if (layerItem && state.layerCandidates) {
         const idx = parseInt(layerItem.getAttribute("data-layer-index"), 10);
         const el = state.layerCandidates[idx];
-        if (el) updateOutline(hoverOutline, el);
+        if (el) {
+          selectedOutline.style.border = "2px solid #ff7d00";
+          selectedOutline.style.boxShadow = "0 0 0 4px rgba(255,125,0,.18)";
+          updateOutline(selectedOutline, el);
+        }
       }
     });
     shadow.addEventListener("mouseout", (event) => {
       const layerItem = event.target?.closest?.(".layer-item");
-      if (layerItem) updateOutline(hoverOutline, null);
+      if (layerItem && state.layerCandidates) {
+        selectedOutline.style.border = "2px solid #3370ff";
+        selectedOutline.style.boxShadow = "0 0 0 4px rgba(51,112,255,.14)";
+        updateOutline(selectedOutline, state.selected);
+      }
     });
     shadow.addEventListener("input", (event) => {
       const target = event.target;
@@ -1709,9 +1796,19 @@
         }
       }
     });
+    function onGlobalKeydown(event) {
+      if (event.key !== "Escape") return;
+      if (state.layerCandidates) {
+        event.preventDefault();
+        state.layerCandidates = null;
+        state.status = "\u5DF2\u53D6\u6D88\u9009\u62E9\uFF0C\u70B9\u51FB\u9875\u9762\u5143\u7D20\u91CD\u65B0\u9009\u53D6\u3002";
+        rerender();
+      }
+    }
     document.addEventListener("mousemove", onMouseMove, true);
     document.addEventListener("click", onClick, true);
     document.addEventListener("dblclick", onDblClick, true);
+    document.addEventListener("keydown", onGlobalKeydown, true);
     readStoredEdits().forEach((record) => applyEdit(record));
     rerender();
     const api = {
@@ -1719,6 +1816,7 @@
         document.removeEventListener("mousemove", onMouseMove, true);
         document.removeEventListener("click", onClick, true);
         document.removeEventListener("dblclick", onDblClick, true);
+        document.removeEventListener("keydown", onGlobalKeydown, true);
         if (editingElement) commitTextEdit();
         root.remove();
         hoverOutline.remove();

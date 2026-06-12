@@ -3,6 +3,7 @@ import { applyEdit, createEditRecord, readStoredEdits, readStoredEditsForPath, s
 import { getElementLabel } from '../core/selectors.mjs'
 import { renderPropertiesPanel, getPropertiesPanelStyles } from './properties-panel.mjs'
 import { llmParseCommand, getApiKey, setApiKey } from '../core/llm-command.mjs'
+import { trackUnrecognized, getPendingCount, autoReport } from '../core/analytics.mjs'
 
 const ROOT_ID = 'click-edit-root'
 const HOVER_OUTLINE_ID = 'click-edit-hover-outline'
@@ -216,7 +217,20 @@ function renderPanel(shadow, state) {
       .empty-history { color: #8f959e; font-size: 12px; }
 
       .layer-picker { padding: 8px 16px 0; }
-      .layer-picker-title { font: 600 12px/1 inherit; color: #646a73; margin-bottom: 8px; }
+      .layer-picker-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .layer-picker-title { font: 600 12px/1.3 inherit; color: #646a73; flex: 1; }
+      .layer-picker-back {
+        display: inline-flex; align-items: center; gap: 2px;
+        height: 24px; padding: 0 10px;
+        border: 1px solid #d8dadf;
+        border-radius: 999px;
+        background: #fff;
+        color: #1f2329;
+        font: 500 12px/1 inherit;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .layer-picker-back:hover { background: #f6f6fb; border-color: #c1c4ca; }
       .layer-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
       .layer-item {
         display: flex;
@@ -228,7 +242,7 @@ function renderPanel(shadow, state) {
         cursor: pointer;
         transition: background .1s;
       }
-      .layer-item:hover { background: #e8e9ee; }
+      .layer-item:hover { background: #e8efff; box-shadow: inset 0 0 0 1px #3370ff; }
       .layer-item--depth {
         width: 24px;
         height: 24px;
@@ -241,8 +255,8 @@ function renderPanel(shadow, state) {
       }
       .layer-item--info { min-width: 0; flex: 1; }
       .layer-item--tag { font: 600 12px/1.3 monospace; color: #1f2329; }
-      .layer-item--text { font: 11px/1.4 inherit; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .layer-item--size { font: 11px/1 inherit; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
+      .layer-item--text { font-size: 12px; line-height: 1.4; color: #8f959e; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .layer-item--size { font-size: 12px; line-height: 1; color: #b0b3b8; white-space: nowrap; flex-shrink: 0; }
 
       button {
         border: 0;
@@ -271,7 +285,10 @@ function renderPanel(shadow, state) {
       <div class="body">
         ${state.layerCandidates ? `
           <div class="layer-picker">
-            <div class="layer-picker-title">点击位置有 ${state.layerCandidates.length} 个图层（从上到下）</div>
+            <div class="layer-picker-header">
+              <button class="layer-picker-back" data-action="cancel-layer-pick" title="返回（Esc）">返回</button>
+              <div class="layer-picker-title">点击位置有 ${state.layerCandidates.length} 个图层（从上到下）</div>
+            </div>
             <div class="layer-list">
               ${state.layerCandidates.map((el, i) => {
                 const tag = el.tagName.toLowerCase()
@@ -427,6 +444,8 @@ export function initClickEdit(options = {}) {
     if (!state.enabled) return
     state.hovered = isEditableTarget(event.target) ? event.target : null
     updateOutline(hoverOutline, state.hovered && state.hovered !== state.selected ? state.hovered : null)
+    // 图层选择器期间，selectedOutline 由弹窗 mouseover 接管（橙色对照），不在这里覆盖
+    if (state.layerCandidates) return
     updateOutline(selectedOutline, state.selected)
   }
 
@@ -543,6 +562,7 @@ export function initClickEdit(options = {}) {
     if (candidates.length > 1) {
       state.layerCandidates = candidates
       state.status = `检测到 ${candidates.length} 个重叠图层，请在面板中选择`
+      updateOutline(hoverOutline, null)
       updateOutline(selectedOutline, null)
       rerender()
       return
@@ -583,6 +603,7 @@ export function initClickEdit(options = {}) {
       rerender()
       const llmResult = await llmParseCommand(command, getElementContext(target))
       if (!llmResult || isParsedCommandEmpty(llmResult)) {
+        trackUnrecognized(command, getElementContext(target))
         setStatus('未能理解指令，请换种方式描述。')
         return undefined
       }
@@ -709,6 +730,12 @@ export function initClickEdit(options = {}) {
       if (el) selectElement(el)
       return
     }
+    if (action === 'cancel-layer-pick') {
+      state.layerCandidates = null
+      state.status = '已取消选择，点击页面元素重新选取。'
+      rerender()
+      return
+    }
 
     // group fold/unfold
     const groupHeader = event.target?.closest?.('.group-header')
@@ -743,13 +770,23 @@ export function initClickEdit(options = {}) {
     if (layerItem && state.layerCandidates) {
       const idx = parseInt(layerItem.getAttribute('data-layer-index'), 10)
       const el = state.layerCandidates[idx]
-      if (el) updateOutline(hoverOutline, el)
+      if (el) {
+        // 用橙色高亮，比品牌蓝在多种背景上都更醒目
+        selectedOutline.style.border = '2px solid #ff7d00'
+        selectedOutline.style.boxShadow = '0 0 0 4px rgba(255,125,0,.18)'
+        updateOutline(selectedOutline, el)
+      }
     }
   })
 
   shadow.addEventListener('mouseout', event => {
     const layerItem = event.target?.closest?.('.layer-item')
-    if (layerItem) updateOutline(hoverOutline, null)
+    if (layerItem && state.layerCandidates) {
+      // 离开候选项后清空 outline，并把样式恢复回品牌蓝（默认选中态用）
+      selectedOutline.style.border = '2px solid #3370ff'
+      selectedOutline.style.boxShadow = '0 0 0 4px rgba(51,112,255,.14)'
+      updateOutline(selectedOutline, state.selected)
+    }
   })
 
   // 实时预览：input 事件直接操作 DOM style，不产生记录
@@ -852,9 +889,20 @@ export function initClickEdit(options = {}) {
     }
   })
 
+  function onGlobalKeydown(event) {
+    if (event.key !== 'Escape') return
+    if (state.layerCandidates) {
+      event.preventDefault()
+      state.layerCandidates = null
+      state.status = '已取消选择，点击页面元素重新选取。'
+      rerender()
+    }
+  }
+
   document.addEventListener('mousemove', onMouseMove, true)
   document.addEventListener('click', onClick, true)
   document.addEventListener('dblclick', onDblClick, true)
+  document.addEventListener('keydown', onGlobalKeydown, true)
 
   readStoredEdits().forEach(record => applyEdit(record))
   rerender()
@@ -864,6 +912,7 @@ export function initClickEdit(options = {}) {
       document.removeEventListener('mousemove', onMouseMove, true)
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('dblclick', onDblClick, true)
+      document.removeEventListener('keydown', onGlobalKeydown, true)
       if (editingElement) commitTextEdit()
       root.remove()
       hoverOutline.remove()
