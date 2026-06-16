@@ -14,10 +14,42 @@ function recordMatchesPath(record, path) {
   return !record.path || record.path === path
 }
 
+// 解析 "+20px" / "-12px" → { op, value, unit }
+function parseDelta(delta) {
+  const m = String(delta).match(/^([+-])\s*(\d+(?:\.\d+)?)(px|%|vh|vw|rem|em)?$/)
+  if (!m) return null
+  return { op: m[1], value: parseFloat(m[2]), unit: m[3] || 'px' }
+}
+
+// 读元素某属性的「当前生效值」：优先 inline，其次 computed
+function readEffectiveValue(element, property) {
+  const inline = element.style.getPropertyValue(property)
+  if (inline) return inline
+  if (typeof window === 'undefined') return ''
+  return window.getComputedStyle(element).getPropertyValue(property)
+}
+
+// 用 calc 表达相对增量，保持响应式基准（auto/% 也安全）
+function computeDeltaValue(element, property, delta) {
+  const parsed = parseDelta(delta)
+  if (!parsed) return undefined
+  const current = readEffectiveValue(element, property).trim()
+  const amount = `${parsed.value}${parsed.unit}`
+  // 当前值缺失或为 auto：直接用增量本身（auto 无法参与 calc）
+  if (!current || current === 'auto' || current === 'none') {
+    return parsed.op === '-' ? `calc(0px - ${amount})` : amount
+  }
+  return `calc(${current} ${parsed.op} ${amount})`
+}
+
 function captureBeforeSnapshot(element, parsed) {
   const style = {}
   for (const key of Object.keys(parsed.style || {})) {
     style[key] = element.style.getPropertyValue(toCssPropertyName(key))
+  }
+  // delta 涉及的属性也要记录修改前的 inline 值，供回退
+  for (const key of Object.keys(parsed.deltas || {})) {
+    if (!(key in style)) style[key] = element.style.getPropertyValue(toCssPropertyName(key))
   }
 
   let orderIndex
@@ -46,6 +78,7 @@ export function createEditRecord({ element, command, parsed, path = getCurrentPa
     order: parsed.order,
     insert: parsed.insert,
     style: parsed.style,
+    deltas: parsed.deltas,
     before: captureBeforeSnapshot(element, parsed),
     source: getSourceHint(element),
     createdAt: new Date().toISOString(),
@@ -102,6 +135,14 @@ export function applyEdit(record, root = document) {
       element.style.removeProperty(property)
     } else {
       element.style.setProperty(property, value)
+    }
+  }
+
+  for (const [key, delta] of Object.entries(record.deltas || {})) {
+    const property = toCssPropertyName(key)
+    const computed = computeDeltaValue(element, property, delta)
+    if (computed !== undefined) {
+      element.style.setProperty(property, computed)
     }
   }
 

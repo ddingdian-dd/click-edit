@@ -68,10 +68,25 @@
     if (/灰/.test(command)) return "rgba(246, 246, 251, 0.72)";
     return "rgba(255, 255, 255, 0.72)";
   }
-  function extractCssSize(command, axis) {
-    const match = command.match(new RegExp(`${axis}[^0-9]*(\\d+(?:\\.\\d+)?)(px|%|vh|vw|rem|em)?`));
-    if (!match) return void 0;
-    return `${match[1]}${match[2] || "px"}`;
+  function normalizeUnit(unit) {
+    return !unit || unit === "\u50CF\u7D20" ? "px" : unit;
+  }
+  function clauseAround(command, keyword) {
+    const start = command.indexOf(keyword);
+    if (start < 0) return command;
+    const rest = command.slice(start);
+    const end = rest.search(/[，,；;]/);
+    return end < 0 ? rest : rest.slice(0, end);
+  }
+  function detectDeltaOp(clause) {
+    if (/增加|加大|增大|加宽|增高|调大|\+|＋/.test(clause)) return "+";
+    if (/减少|减小|缩小|降低|调小|\-|－/.test(clause)) return "-";
+    return null;
+  }
+  function extractSizeValue(clause) {
+    const m = clause.match(/(\d+(?:\.\d+)?)\s*(px|%|vh|vw|rem|em|像素)?/);
+    if (!m) return null;
+    return `${m[1]}${normalizeUnit(m[2])}`;
   }
   function extractTextColor(command) {
     const afterText = command.match(/(?:文字|字体?|文本)(?:颜色)?(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/);
@@ -136,9 +151,10 @@
   function parseVisualCommand(command) {
     const input = command.trim();
     const style = {};
+    const deltas = {};
     let text;
     let hidden;
-    if (!input) return { style };
+    if (!input) return { style, deltas };
     if (input.includes("\u9690\u85CF")) hidden = true;
     if (input.includes("\u663E\u793A")) hidden = false;
     if (/^(删除|删掉|去掉|移除)(这个|该|此)?(元素|模块|组件|板块|区块)?$/.test(input) || input === "\u5220\u9664") hidden = true;
@@ -158,9 +174,13 @@
     }
     applyVisualStyleCommand(input, style);
     if (input.includes("\u9AD8\u5EA6")) {
-      const height = extractCssSize(input, "\u9AD8\u5EA6");
-      if (height) {
-        style.minHeight = height;
+      const clause = clauseAround(input, "\u9AD8\u5EA6");
+      const op = detectDeltaOp(clause);
+      const value = extractSizeValue(clause);
+      if (op && value) {
+        deltas.height = `${op}${value}`;
+      } else if (value) {
+        style.minHeight = value;
       } else if (hasPageSizeIntent(input)) {
         style.minHeight = "100vh";
       } else if (input.includes("\u81EA\u9002\u5E94") || input.includes("\u9002\u914D")) {
@@ -168,9 +188,13 @@
       }
     }
     if (input.includes("\u5BBD\u5EA6")) {
-      const width = extractCssSize(input, "\u5BBD\u5EA6");
-      if (width) {
-        style.width = width;
+      const clause = clauseAround(input, "\u5BBD\u5EA6");
+      const op = detectDeltaOp(clause);
+      const value = extractSizeValue(clause);
+      if (op && value) {
+        deltas.width = `${op}${value}`;
+      } else if (value) {
+        style.width = value;
       } else if (input.includes("\u94FA\u6EE1") || input.includes("\u6491\u6EE1") || input.includes("\u6EE1")) {
         style.width = "100%";
       } else if (input.includes("\u81EA\u9002\u5E94") || input.includes("\u9002\u914D")) {
@@ -196,7 +220,13 @@
       const dirMap = { "\u4E0A": "Top", "\u4E0B": "Bottom", "\u5DE6": "Left", "\u53F3": "Right", "top": "Top", "bottom": "Bottom", "left": "Left", "right": "Right" };
       const dir = spacingMatch[2] ? dirMap[spacingMatch[2].toLowerCase()] || "" : "";
       const value = `${spacingMatch[3]}${spacingMatch[4] || "px"}`;
-      style[`${propBase}${dir}`] = value;
+      const prop = `${propBase}${dir}`;
+      const op = detectDeltaOp(clauseAround(input, spacingMatch[1]));
+      if (op) {
+        deltas[prop] = `${op}${value}`;
+      } else {
+        style[prop] = value;
+      }
     }
     const cssPropMatch = input.match(/([a-zA-Z-]+)\s*[:：]?\s*(?:改为|设为|改成|设置为?)?\s*(\d+(?:\.\d+)?\s*(?:px|%|rem|em|vh|vw)|#[0-9a-fA-F]{3,8}|[a-zA-Z]+)/i);
     if (cssPropMatch && Object.keys(style).length === 0) {
@@ -206,7 +236,7 @@
         style[rawProp] = cssPropMatch[2].trim();
       }
     }
-    const hasStyleIntent = Object.keys(style).length > 0 || hidden !== void 0;
+    const hasStyleIntent = Object.keys(style).length > 0 || Object.keys(deltas).length > 0 || hidden !== void 0;
     if (hasTextContentIntent(input) || !hasStyleIntent && !hasLayoutIntent(input) && (input.includes("\u6539\u6210") || input.includes("\u6539\u4E3A") || input.includes("\u6362\u6210") || input.includes("\u6362\u4E3A"))) {
       text = extractQuotedText(input);
     }
@@ -220,10 +250,10 @@
     if (insertMatch && !hasStyleIntent) {
       insert = insertMatch[1].trim();
     }
-    return { style, text, hidden, order, insert };
+    return { style, deltas, text, hidden, order, insert };
   }
   function isParsedCommandEmpty(parsed) {
-    return Object.keys(parsed.style || {}).length === 0 && parsed.text === void 0 && parsed.hidden === void 0 && parsed.order === void 0 && parsed.insert === void 0;
+    return Object.keys(parsed.style || {}).length === 0 && Object.keys(parsed.deltas || {}).length === 0 && parsed.text === void 0 && parsed.hidden === void 0 && parsed.order === void 0 && parsed.insert === void 0;
   }
 
   // src/core/selectors.mjs
@@ -278,10 +308,34 @@
   function recordMatchesPath(record, path) {
     return !record.path || record.path === path;
   }
+  function parseDelta(delta) {
+    const m = String(delta).match(/^([+-])\s*(\d+(?:\.\d+)?)(px|%|vh|vw|rem|em)?$/);
+    if (!m) return null;
+    return { op: m[1], value: parseFloat(m[2]), unit: m[3] || "px" };
+  }
+  function readEffectiveValue(element, property) {
+    const inline = element.style.getPropertyValue(property);
+    if (inline) return inline;
+    if (typeof window === "undefined") return "";
+    return window.getComputedStyle(element).getPropertyValue(property);
+  }
+  function computeDeltaValue(element, property, delta) {
+    const parsed = parseDelta(delta);
+    if (!parsed) return void 0;
+    const current = readEffectiveValue(element, property).trim();
+    const amount = `${parsed.value}${parsed.unit}`;
+    if (!current || current === "auto" || current === "none") {
+      return parsed.op === "-" ? `calc(0px - ${amount})` : amount;
+    }
+    return `calc(${current} ${parsed.op} ${amount})`;
+  }
   function captureBeforeSnapshot(element, parsed) {
     const style = {};
     for (const key of Object.keys(parsed.style || {})) {
       style[key] = element.style.getPropertyValue(toCssPropertyName(key));
+    }
+    for (const key of Object.keys(parsed.deltas || {})) {
+      if (!(key in style)) style[key] = element.style.getPropertyValue(toCssPropertyName(key));
     }
     let orderIndex;
     if (parsed.order && element.parentElement) {
@@ -307,6 +361,7 @@
       order: parsed.order,
       insert: parsed.insert,
       style: parsed.style,
+      deltas: parsed.deltas,
       before: captureBeforeSnapshot(element, parsed),
       source: getSourceHint(element),
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -356,6 +411,13 @@
         element.style.removeProperty(property);
       } else {
         element.style.setProperty(property, value);
+      }
+    }
+    for (const [key, delta] of Object.entries(record.deltas || {})) {
+      const property = toCssPropertyName(key);
+      const computed = computeDeltaValue(element, property, delta);
+      if (computed !== void 0) {
+        element.style.setProperty(property, computed);
       }
     }
     return true;

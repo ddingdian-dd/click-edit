@@ -128,3 +128,49 @@ assert.equal(element.style.getPropertyValue('box-shadow'), '')
 assert.deepEqual(readStoredEdits().map(item => item.id), ['other-page-edit'])
 
 console.log('edits passed')
+
+// ---- 相对增量 delta：应用走 calc，回退能还原 ----
+const deltaStore = new Map()
+const deltaEl = new FakeElement()
+// 当前宽度无 inline 值，靠 computed 提供基准
+globalThis.window.getComputedStyle = () => ({
+  getPropertyValue(name) {
+    if (name === 'width') return '300px'
+    if (name === 'height') return 'auto'
+    return ''
+  },
+})
+globalThis.window.localStorage = {
+  getItem: key => deltaStore.get(key) || null,
+  setItem: (key, value) => deltaStore.set(key, value),
+}
+globalThis.document.querySelector = selector =>
+  (selector === '[data-ce-id="hero"]' ? deltaEl : null)
+
+const widthDelta = createEditRecord({
+  element: deltaEl,
+  command: '宽度增加20px',
+  parsed: { style: {}, deltas: { width: '+20px' } },
+})
+// 修改前 inline 宽度为空，快照应记录为空（回退时 removeProperty）
+assert.equal(widthDelta.before.style.width, '')
+
+applyEdit(widthDelta)
+assert.equal(deltaEl.style.getPropertyValue('width'), 'calc(300px + 20px)', '宽度增量应基于 computed 300px')
+
+// 基准为 auto 时退化为增量本身
+const heightDelta = createEditRecord({
+  element: deltaEl,
+  command: '高度增加50px',
+  parsed: { style: {}, deltas: { height: '+50px' } },
+})
+applyEdit(heightDelta)
+assert.equal(deltaEl.style.getPropertyValue('height'), '50px', 'auto 基准下高度增量退化为绝对值')
+
+// 回退宽度增量：inline 还原为空
+saveEdit(widthDelta)
+const revertedWidth = undoLastEdit()
+assert.equal(revertedWidth.command, '宽度增加20px')
+assert.equal(deltaEl.style.getPropertyValue('width'), '', '回退后宽度 inline 应被移除')
+
+console.log('delta edits passed')
