@@ -86,6 +86,32 @@ function extractCssSize(command, axis) {
   return `${match[1]}${match[2] || 'px'}`
 }
 
+function normalizeUnit(unit) {
+  return (!unit || unit === '像素') ? 'px' : unit
+}
+
+// 截取关键词所在的子句（到下一个逗号/分号为止），避免跨子句误判方向
+function clauseAround(command, keyword) {
+  const start = command.indexOf(keyword)
+  if (start < 0) return command
+  const rest = command.slice(start)
+  const end = rest.search(/[，,；;]/)
+  return end < 0 ? rest : rest.slice(0, end)
+}
+
+// 返回 '+' / '-' 表示相对增量，null 表示绝对赋值
+function detectDeltaOp(clause) {
+  if (/增加|加大|增大|加宽|增高|调大|\+|＋/.test(clause)) return '+'
+  if (/减少|减小|缩小|降低|调小|\-|－/.test(clause)) return '-'
+  return null
+}
+
+function extractSizeValue(clause) {
+  const m = clause.match(/(\d+(?:\.\d+)?)\s*(px|%|vh|vw|rem|em|像素)?/)
+  if (!m) return null
+  return `${m[1]}${normalizeUnit(m[2])}`
+}
+
 function extractTextColor(command) {
   // "字白色" / "字变白" / "文字改为白色" / "白字" / "字体颜色改为白色"
   const afterText = command.match(/(?:文字|字体?|文本)(?:颜色)?(?:改|变|换|设)?(?:为|成)?(.+?)(?:[，,;；]|$)/)
@@ -165,10 +191,11 @@ function applyVisualStyleCommand(command, style) {
 export function parseVisualCommand(command) {
   const input = command.trim()
   const style = {}
+  const deltas = {}
   let text
   let hidden
 
-  if (!input) return { style }
+  if (!input) return { style, deltas }
 
   if (input.includes('隐藏')) hidden = true
   if (input.includes('显示')) hidden = false
@@ -192,9 +219,13 @@ export function parseVisualCommand(command) {
   applyVisualStyleCommand(input, style)
 
   if (input.includes('高度')) {
-    const height = extractCssSize(input, '高度')
-    if (height) {
-      style.minHeight = height
+    const clause = clauseAround(input, '高度')
+    const op = detectDeltaOp(clause)
+    const value = extractSizeValue(clause)
+    if (op && value) {
+      deltas.height = `${op}${value}`
+    } else if (value) {
+      style.minHeight = value
     } else if (hasPageSizeIntent(input)) {
       style.minHeight = '100vh'
     } else if (input.includes('自适应') || input.includes('适配')) {
@@ -203,9 +234,13 @@ export function parseVisualCommand(command) {
   }
 
   if (input.includes('宽度')) {
-    const width = extractCssSize(input, '宽度')
-    if (width) {
-      style.width = width
+    const clause = clauseAround(input, '宽度')
+    const op = detectDeltaOp(clause)
+    const value = extractSizeValue(clause)
+    if (op && value) {
+      deltas.width = `${op}${value}`
+    } else if (value) {
+      style.width = value
     } else if (input.includes('铺满') || input.includes('撑满') || input.includes('满')) {
       style.width = '100%'
     } else if (input.includes('自适应') || input.includes('适配')) {
@@ -235,7 +270,13 @@ export function parseVisualCommand(command) {
     const dirMap = { '上': 'Top', '下': 'Bottom', '左': 'Left', '右': 'Right', 'top': 'Top', 'bottom': 'Bottom', 'left': 'Left', 'right': 'Right' }
     const dir = spacingMatch[2] ? dirMap[spacingMatch[2].toLowerCase()] || '' : ''
     const value = `${spacingMatch[3]}${spacingMatch[4] || 'px'}`
-    style[`${propBase}${dir}`] = value
+    const prop = `${propBase}${dir}`
+    const op = detectDeltaOp(clauseAround(input, spacingMatch[1]))
+    if (op) {
+      deltas[prop] = `${op}${value}`
+    } else {
+      style[prop] = value
+    }
   }
 
   // 直接 CSS 属性赋值：如 "font-size 改为 20px" 或 "fontSize: 20px"
@@ -248,7 +289,7 @@ export function parseVisualCommand(command) {
     }
   }
 
-  const hasStyleIntent = Object.keys(style).length > 0 || hidden !== undefined
+  const hasStyleIntent = Object.keys(style).length > 0 || Object.keys(deltas).length > 0 || hidden !== undefined
   if (hasTextContentIntent(input) || (!hasStyleIntent && !hasLayoutIntent(input) && (input.includes('改成') || input.includes('改为') || input.includes('换成') || input.includes('换为')))) {
     text = extractQuotedText(input)
   }
@@ -265,9 +306,9 @@ export function parseVisualCommand(command) {
     insert = insertMatch[1].trim()
   }
 
-  return { style, text, hidden, order, insert }
+  return { style, deltas, text, hidden, order, insert }
 }
 
 export function isParsedCommandEmpty(parsed) {
-  return Object.keys(parsed.style || {}).length === 0 && parsed.text === undefined && parsed.hidden === undefined && parsed.order === undefined && parsed.insert === undefined
+  return Object.keys(parsed.style || {}).length === 0 && Object.keys(parsed.deltas || {}).length === 0 && parsed.text === undefined && parsed.hidden === undefined && parsed.order === undefined && parsed.insert === undefined
 }
