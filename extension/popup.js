@@ -6,18 +6,42 @@ async function getTab() {
   return tab
 }
 
-async function getState(tabId) {
-  const result = await chrome.storage.session.get(`ce_${tabId}`)
-  return result[`ce_${tabId}`] || false
+// 浏览器特权页面无法注入脚本（扩展页、设置页、商店页等）
+function isRestrictedUrl(url) {
+  if (!url) return true
+  return /^(atlas|chrome|edge|brave|about|view-source|chrome-extension|moz-extension|devtools):/i.test(url) ||
+    /^https?:\/\/chromewebstore\.google\.com\//i.test(url) ||
+    /^https?:\/\/chrome\.google\.com\/webstore\//i.test(url)
 }
 
-async function setState(tabId, enabled) {
-  await chrome.storage.session.set({ [`ce_${tabId}`]: enabled })
+// 探测页面真实状态：编辑器是否真的在运行（而非依赖 storage 缓存）
+async function probeRunning(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => !!window.__CLICK_EDIT__
+    })
+    return !!result
+  } catch {
+    return false
+  }
 }
 
 async function updateUI() {
   const tab = await getTab()
-  const enabled = await getState(tab.id)
+
+  if (isRestrictedUrl(tab.url)) {
+    btn.textContent = '启用编辑器'
+    btn.className = 'btn'
+    btn.disabled = true
+    status.textContent = '此页面受浏览器保护，无法启用编辑器。请在普通网页中使用。'
+    status.style.color = '#8f959e'
+    return
+  }
+
+  btn.disabled = false
+  const enabled = await probeRunning(tab.id)
   btn.textContent = enabled ? '停用编辑器' : '启用编辑器'
   btn.className = enabled ? 'btn btn--off' : 'btn'
   status.textContent = enabled ? '编辑器已在当前页面运行' : ''
@@ -42,7 +66,9 @@ async function injectEditor(tabId) {
 
 btn.addEventListener('click', async () => {
   const tab = await getTab()
-  const enabled = await getState(tab.id)
+  if (isRestrictedUrl(tab.url)) return
+
+  const enabled = await probeRunning(tab.id)
   const newState = !enabled
 
   try {
@@ -61,7 +87,6 @@ btn.addEventListener('click', async () => {
         }
       })
     }
-    await setState(tab.id, newState)
   } catch (err) {
     status.textContent = err.message
     status.style.color = '#f54a45'

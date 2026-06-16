@@ -1124,7 +1124,6 @@
       "border-radius:8px",
       "display:none"
     ].join(";");
-    document.body.appendChild(outline);
     return outline;
   }
   function updateOutline(outline, element) {
@@ -1348,7 +1347,6 @@
     const root = document.createElement("div");
     root.id = ROOT_ID;
     const shadow = root.attachShadow({ mode: "open" });
-    document.body.appendChild(root);
     const hoverOutline = createOutline({
       id: HOVER_OUTLINE_ID,
       border: "border:1px dashed rgba(51,112,255,.82)",
@@ -1361,6 +1359,15 @@
       shadow: "box-shadow:0 0 0 4px rgba(51,112,255,.14)",
       zIndex: 2147483646
     });
+    const mountHost = document.documentElement;
+    function ensureMounted() {
+      if (!root.isConnected) mountHost.appendChild(root);
+      if (!hoverOutline.isConnected) mountHost.appendChild(hoverOutline);
+      if (!selectedOutline.isConnected) mountHost.appendChild(selectedOutline);
+    }
+    ensureMounted();
+    const mountObserver = new MutationObserver(() => ensureMounted());
+    mountObserver.observe(mountHost, { childList: true });
     const state = {
       enabled: options.enabled ?? false,
       collapsed: false,
@@ -1950,6 +1957,7 @@
     rerender();
     const api = {
       destroy() {
+        mountObserver.disconnect();
         document.removeEventListener("mousemove", onMouseMove, true);
         document.removeEventListener("click", onClick, true);
         document.removeEventListener("dblclick", onDblClick, true);

@@ -104,7 +104,6 @@ function createOutline({ id, border, shadow, zIndex }) {
     'border-radius:8px',
     'display:none',
   ].join(';')
-  document.body.appendChild(outline)
   return outline
 }
 
@@ -335,7 +334,6 @@ export function initClickEdit(options = {}) {
   const root = document.createElement('div')
   root.id = ROOT_ID
   const shadow = root.attachShadow({ mode: 'open' })
-  document.body.appendChild(root)
 
   const hoverOutline = createOutline({
     id: HOVER_OUTLINE_ID,
@@ -349,6 +347,22 @@ export function initClickEdit(options = {}) {
     shadow: 'box-shadow:0 0 0 4px rgba(51,112,255,.14)',
     zIndex: 2147483646,
   })
+
+  // 挂到 <html> 而非 <body>：SPA 框架（React/Vue）re-render 时会替换 body 子树，
+  // 把注入节点冲掉，导致 window.__CLICK_EDIT__ 还在但面板消失。<html> 子树不受框架管理。
+  const mountHost = document.documentElement
+  function ensureMounted() {
+    if (!root.isConnected) mountHost.appendChild(root)
+    if (!hoverOutline.isConnected) mountHost.appendChild(hoverOutline)
+    if (!selectedOutline.isConnected) mountHost.appendChild(selectedOutline)
+  }
+  ensureMounted()
+
+  // 看门狗：万一节点仍被移除，监听 <html> 直接子节点变化并自愈重挂。
+  // 只看直接子节点（root/outline 都是 <html> 的直接子节点，body 被替换也是直接子节点变化），
+  // 不用 subtree，避免 SPA 频繁 DOM 变更带来的性能开销与回调风暴。
+  const mountObserver = new MutationObserver(() => ensureMounted())
+  mountObserver.observe(mountHost, { childList: true })
   const state = {
     enabled: options.enabled ?? false,
     collapsed: false,
@@ -996,6 +1010,7 @@ export function initClickEdit(options = {}) {
 
   const api = {
     destroy() {
+      mountObserver.disconnect() // 先停看门狗，否则 remove() 会被自愈逻辑立刻重挂
       document.removeEventListener('mousemove', onMouseMove, true)
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('dblclick', onDblClick, true)
