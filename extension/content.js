@@ -1405,7 +1405,14 @@
   }
   function initClickEdit(options = {}) {
     if (typeof window === "undefined") return void 0;
-    if (window.__CLICK_EDIT__) return window.__CLICK_EDIT__;
+    const existing = window.__CLICK_EDIT__;
+    if (existing) {
+      if (typeof existing.isAlive === "function" && existing.isAlive()) return existing;
+      try {
+        existing.destroy();
+      } catch {
+      }
+    }
     const root = document.createElement("div");
     root.id = ROOT_ID;
     const shadow = root.attachShadow({ mode: "open" });
@@ -2018,6 +2025,8 @@
     readStoredEdits().forEach((record) => applyEdit(record));
     rerender();
     const api = {
+      // 面板真实存活 = root 节点仍挂在当前文档上。popup 与重复注入都以此为准，避免标记残留导致的死状态。
+      isAlive: () => root.isConnected && root.ownerDocument === document,
       destroy() {
         mountObserver.disconnect();
         document.removeEventListener("mousemove", onMouseMove, true);
@@ -2041,12 +2050,10 @@
 
   // extension/content-entry.mjs
   console.log("[Click-Edit] content script loaded, initializing...");
-  if (!window.__CLICK_EDIT__) {
-    try {
-      initClickEdit({ enabled: true });
-      console.log("[Click-Edit] editor initialized successfully");
-    } catch (err) {
-      console.error("[Click-Edit] init failed:", err);
-    }
+  try {
+    initClickEdit({ enabled: true });
+    console.log("[Click-Edit] editor initialized successfully");
+  } catch (err) {
+    console.error("[Click-Edit] init failed:", err);
   }
 })();

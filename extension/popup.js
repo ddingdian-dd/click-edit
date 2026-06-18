@@ -14,13 +14,22 @@ function isRestrictedUrl(url) {
     /^https?:\/\/chrome\.google\.com\/webstore\//i.test(url)
 }
 
-// 探测页面真实状态：编辑器是否真的在运行（而非依赖 storage 缓存）
+// 探测页面真实状态：编辑器面板是否真的活着。
+// 不能只看 window.__CLICK_EDIT__ 标记——重载扩展不会刷新已打开页面，
+// 旧标记会残留但面板 DOM 已失效，导致 popup 误判为"运行中"却打不开。
+// 以面板节点真实挂在文档上为准（isAlive），标记残留时返回 false 触发重建。
 async function probeRunning(tabId) {
   try {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: () => !!window.__CLICK_EDIT__
+      func: () => {
+        const api = window.__CLICK_EDIT__
+        if (!api) return false
+        // 旧版本无 isAlive：用节点存在性兜底
+        if (typeof api.isAlive === 'function') return api.isAlive()
+        return !!document.getElementById('click-edit-root')
+      }
     })
     return !!result
   } catch {
@@ -57,7 +66,12 @@ async function injectEditor(tabId) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
-    func: () => !!window.__CLICK_EDIT__
+    func: () => {
+      const api = window.__CLICK_EDIT__
+      if (!api) return false
+      if (typeof api.isAlive === 'function') return api.isAlive()
+      return !!document.getElementById('click-edit-root')
+    }
   })
   if (!result) {
     throw new Error('编辑器注入失败，请检查页面是否有 CSP 限制')

@@ -329,7 +329,14 @@ function renderPanel(shadow, state) {
 
 export function initClickEdit(options = {}) {
   if (typeof window === 'undefined') return undefined
-  if (window.__CLICK_EDIT__) return window.__CLICK_EDIT__
+  // 复用判断基准是「面板是否真实存活」，而非「标记是否存在」。
+  // 标记 __CLICK_EDIT__ 挂在页面 MAIN world，重载扩展不会清它；
+  // 若面板 DOM 已被冲掉/失效而标记残留，必须销毁残留实例后重建，否则会卡死在「已运行但无界面」。
+  const existing = window.__CLICK_EDIT__
+  if (existing) {
+    if (typeof existing.isAlive === 'function' && existing.isAlive()) return existing
+    try { existing.destroy() } catch {}
+  }
 
   const root = document.createElement('div')
   root.id = ROOT_ID
@@ -1009,6 +1016,8 @@ export function initClickEdit(options = {}) {
   rerender()
 
   const api = {
+    // 面板真实存活 = root 节点仍挂在当前文档上。popup 与重复注入都以此为准，避免标记残留导致的死状态。
+    isAlive: () => root.isConnected && root.ownerDocument === document,
     destroy() {
       mountObserver.disconnect() // 先停看门狗，否则 remove() 会被自愈逻辑立刻重挂
       document.removeEventListener('mousemove', onMouseMove, true)
