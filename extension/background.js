@@ -40,3 +40,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     })
   } catch {}
 })
+
+// tab 关闭后清掉它的启用标记，否则 Chrome 复用 tabId 时，
+// 新页面会被误判为「已启用」而自动注入编辑器。
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.storage.session.remove(`ce_${tabId}`).catch(() => {})
+})

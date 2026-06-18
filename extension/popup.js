@@ -88,9 +88,14 @@ btn.addEventListener('click', async () => {
   try {
     if (newState) {
       await injectEditor(tab.id)
+      // 标记此 tab 已启用：background 在页面刷新（onUpdated complete）后据此自动重注入。
+      // 缺这一步会导致刷新后编辑器不恢复。
+      await chrome.storage.session.set({ [`ce_${tab.id}`]: true })
       const domain = new URL(tab.url || '').hostname || ''
       chrome.runtime.sendMessage({ type: 'ce_ping', domain })
     } else {
+      // 清除标记，避免刷新后又被 background 自动注入。
+      await chrome.storage.session.remove(`ce_${tab.id}`)
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         world: 'MAIN',
